@@ -4,23 +4,22 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
 from airflow.exceptions import AirflowException
 
 from .base import BaseConnector
 
 
-class MSSQLImportConnector(BaseConnector):
+class DB2ImportConnector(BaseConnector):
     """
-    Pull rows from a Microsoft SQL Server table into a local parquet file.
+    Pull rows from an IBM Db2 table into a local parquet file.
 
-    The connector relies on ``MsSqlHook`` from the Airflow MSSQL provider
-    package, so the connection ``connection_id_import`` must already exist
-    in Airflow with type ``mssql``.
+    Uses ``Db2Hook`` from an installed Airflow DB2 provider (Apache IBM
+    provider when available, otherwise ``airflow-provider-ibm-db2``). The
+    Airflow connection ``connection_id_import`` must exist (conn type per
+    your provider, commonly ``db2`` / ``Db2``).
     """
 
-    # Default landing zone: <project_root>/data, where <project_root> is the
-    # folder that contains both connector_class/ and DAG/. Can be overridden
-    # by setting the AIRFLOW_LANDING_DIR environment variable.
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent
     LANDING_DIR = Path(
         os.environ.get("AIRFLOW_LANDING_DIR", _PROJECT_ROOT / "data")
@@ -47,30 +46,36 @@ class MSSQLImportConnector(BaseConnector):
         )
 
     def _build_query(self) -> str:
-        query = f"SELECT * FROM [{self.schema}].[{self.table}]"
+        query = f'SELECT * FROM "{self.schema}"."{self.table}"'
         if self.predicate:
             query += f" WHERE {self.predicate}"
         return query
 
     def _get_hook(self):
-        # Imported lazily so importing this module doesn't require the provider
-        # at parse time (helps unit tests + makes import errors clearer).
+        Db2Hook = None
         try:
-            from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
-        except ImportError as exc:
-            raise AirflowException(
-                "apache-airflow-providers-microsoft-mssql is not installed; "
-                "cannot create MsSqlHook."
-            ) from exc
+            from airflow.providers.ibm.hooks.db2 import Db2Hook as _ApacheDb2Hook
+
+            Db2Hook = _ApacheDb2Hook
+        except ImportError:
+            try:
+                from airflow_provider_ibm_db2.hooks.db2 import (
+                    Db2Hook as _CommunityDb2Hook,
+                )
+
+                Db2Hook = _CommunityDb2Hook
+            except ImportError as exc:
+                raise AirflowException(
+                    "No Db2Hook implementation found. Install a DB2 Airflow provider "
+                    "(e.g. `pip install airflow-provider-ibm-db2`) or add the Apache "
+                    "IBM provider compatible with your Airflow version."
+                ) from exc
 
         try:
-            return MsSqlHook(
-                mssql_conn_id=self.connection_id,
-                schema=self.database,
-            )
+            return Db2Hook(db2_conn_id=self.connection_id)
         except Exception as exc:
             raise AirflowException(
-                f"Failed to instantiate MsSqlHook for connection "
+                f"Failed to instantiate Db2Hook for connection "
                 f"'{self.connection_id}': {exc}"
             ) from exc
 
@@ -91,33 +96,27 @@ class MSSQLImportConnector(BaseConnector):
         return self.LANDING_DIR / f"{self.table}_{ts_nodash}.parquet"
 
     def to_parquet(self, **context: Any) -> str:
-        """
-        Run the SELECT, write the result to a parquet file in the landing dir,
-        and return the absolute path.
-
-        If the query returns 0 rows, an empty parquet file containing only the
-        column schema (no data rows) is still written and uploaded downstream.
-
-        Raises ``AirflowException`` on connection errors, query errors, or
-        filesystem failures.
-        """
         hook = self._get_hook()
         query = self._build_query()
         out_path = self._resolve_output_path(**context)
         tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
 
-        self.logger.info("Running MSSQL query on %s: %s", self.fqtn, query)
+        self.logger.info("Running DB2 query on %s: %s", self.fqtn, query)
         try:
-            df = hook.get_pandas_df(sql=query)
+            conn = hook.get_conn()
+            try:
+                df = pd.read_sql(query, conn)
+            finally:
+                conn.close()
         except Exception as exc:
-            self.logger.exception("MSSQL query failed for %s", self.fqtn)
+            self.logger.exception("DB2 query failed for %s", self.fqtn)
             raise AirflowException(
-                f"MSSQL query failed for {self.fqtn}: {exc}"
+                f"DB2 query failed for {self.fqtn}: {exc}"
             ) from exc
 
         if df is None:
             raise AirflowException(
-                f"MSSQL hook returned None for {self.fqtn}; cannot infer "
+                f"DB2 read returned None for {self.fqtn}; cannot infer "
                 f"schema to write a parquet file."
             )
 
