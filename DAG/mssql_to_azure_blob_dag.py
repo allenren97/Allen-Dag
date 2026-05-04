@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,9 +12,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from airflow.decorators import dag, task
+from airflow import DAG
 from airflow.exceptions import AirflowException
-from airflow.operators.python import get_current_context
+from airflow.operators.python import PythonOperator, get_current_context
 
 from connector_class.db2 import DB2ImportConnector
 from connector_class.mssql import MSSQLImportConnector
@@ -32,18 +33,113 @@ default_args = {
 }
 
 
+def _safe_task_suffix(cfg: dict[str, Any], index: int) -> str:
+    raw = str(cfg.get("name") or cfg.get("table") or f"table_{index}")
+    safe = re.sub(r"[^0-9A-Za-z._-]+", "_", raw).strip("._-") or f"idx_{index}"
+    return safe
+
+
+def extract_to_parquet_callable(
+    cfg: dict[str, Any],
+    landing_partition_prefix: str,
+) -> str:
+    context = get_current_context()
+    engine = str(cfg.get("engine", "")).lower().strip()
+    logger.info(
+        "Extract start engine=%s for %s.%s.%s predicate=%r",
+        engine,
+        cfg["database"],
+        cfg["schema"],
+        cfg["table"],
+        cfg.get("predicate"),
+    )
+    try:
+        if engine == "mssql":
+            importer = MSSQLImportConnector(
+                connection_id_import=cfg["connection_id_import"],
+                database=cfg["database"],
+                schema=cfg["schema"],
+                table=cfg["table"],
+                predicate=cfg.get("predicate"),
+                landing_partition_prefix=landing_partition_prefix,
+            )
+        elif engine == "db2":
+            importer = DB2ImportConnector(
+                connection_id_import=cfg["connection_id_import"],
+                database=cfg["database"],
+                schema=cfg["schema"],
+                table=cfg["table"],
+                predicate=cfg.get("predicate"),
+                landing_partition_prefix=landing_partition_prefix,
+            )
+        else:
+            raise AirflowException(
+                f"Unsupported engine {cfg.get('engine')!r} for "
+                f"table {cfg.get('name')!r}"
+            )
+        local_parquet_path = importer.to_parquet(**context)
+    except AirflowException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error in extract task")
+        raise AirflowException(f"Extract task crashed: {exc}") from exc
+
+    logger.info("Extract succeeded; parquet at %s", local_parquet_path)
+    return local_parquet_path
+
+
+def upload_to_azure_blob_callable(
+    cfg: dict[str, Any],
+    extract_task_id: str,
+) -> str:
+    context = get_current_context()
+    ti = context["ti"]
+    parquet_path = ti.xcom_pull(task_ids=extract_task_id)
+    if not parquet_path:
+        raise AirflowException("No parquet path from extract; nothing to upload.")
+
+    dag = context.get("dag")
+    dag_id_val = getattr(dag, "dag_id", None) or "manual"
+
+    logger.info(
+        "Upload start %s -> blob (table=%s)",
+        parquet_path,
+        cfg["table"],
+    )
+    try:
+        exporter = AzureExportConnector(
+            connection_id_export=cfg["connection_id_export"],
+            database=cfg["database"],
+            schema=cfg["schema"],
+            table=cfg["table"],
+            container_name=dag_id_val,
+            delete_local=True,
+        )
+        blob_uri = exporter.upload(
+            local_parquet_path=parquet_path,
+            **context,
+        )
+    except AirflowException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error in upload task")
+        raise AirflowException(f"Upload task crashed: {exc}") from exc
+
+    logger.info("Upload succeeded: %s", blob_uri)
+    return blob_uri
+
+
 def _build_parallel_blob_dag(
     dag_id: str,
     schedule: str,
     table_configs: list[dict[str, Any]],
     landing_partition_prefix: str,
-):
+) -> DAG:
     """
-    Airflow 2.10 TaskFlow + dynamic task mapping: one mapped extract and one
-    mapped upload; map indices align so three tables run in parallel.
+    Classic DAG: ``with DAG(...)`` plus one ``PythonOperator`` extract and one
+    ``PythonOperator`` upload per table config; branches run in parallel.
     """
-
-    @dag(
+    with DAG(
         dag_id=dag_id,
         description=(
             f"Parallel ETL: {len(table_configs)} tables ({dag_id}) -> Azure Blob"
@@ -54,94 +150,29 @@ def _build_parallel_blob_dag(
         default_args=default_args,
         tags=[dag_id, "azure_blob", "etl", "parallel"],
         max_active_runs=1,
-    )
-    def _parallel_etl():
-        @task(task_id="extract_to_parquet")
-        def extract_to_parquet(cfg: dict[str, Any]) -> str:
-            context = get_current_context()
-            engine = str(cfg.get("engine", "")).lower().strip()
-            logger.info(
-                "Extract start engine=%s for %s.%s.%s predicate=%r",
-                engine,
-                cfg["database"],
-                cfg["schema"],
-                cfg["table"],
-                cfg.get("predicate"),
+    ) as dag:
+        for i, cfg in enumerate(table_configs):
+            suffix = _safe_task_suffix(cfg, i)
+            extract_task_id = f"extract_{suffix}"
+            extract = PythonOperator(
+                task_id=extract_task_id,
+                python_callable=extract_to_parquet_callable,
+                op_kwargs={
+                    "cfg": cfg,
+                    "landing_partition_prefix": landing_partition_prefix,
+                },
             )
-            try:
-                if engine == "mssql":
-                    importer = MSSQLImportConnector(
-                        connection_id_import=cfg["connection_id_import"],
-                        database=cfg["database"],
-                        schema=cfg["schema"],
-                        table=cfg["table"],
-                        predicate=cfg.get("predicate"),
-                        landing_partition_prefix=landing_partition_prefix,
-                    )
-                elif engine == "db2":
-                    importer = DB2ImportConnector(
-                        connection_id_import=cfg["connection_id_import"],
-                        database=cfg["database"],
-                        schema=cfg["schema"],
-                        table=cfg["table"],
-                        predicate=cfg.get("predicate"),
-                        landing_partition_prefix=landing_partition_prefix,
-                    )
-                else:
-                    raise AirflowException(
-                        f"Unsupported engine {cfg.get('engine')!r} for "
-                        f"table {cfg.get('name')!r}"
-                    )
-                local_parquet_path = importer.to_parquet(**context)
-            except AirflowException:
-                raise
-            except Exception as exc:
-                logger.exception("Unexpected error in extract task")
-                raise AirflowException(f"Extract task crashed: {exc}") from exc
-
-            logger.info("Extract succeeded; parquet at %s", local_parquet_path)
-            return local_parquet_path
-
-        @task(task_id="upload_to_azure_blob")
-        def upload_to_azure_blob(cfg: dict[str, Any], parquet_path: str) -> str:
-            context = get_current_context()
-            if not parquet_path:
-                raise AirflowException("No parquet path from extract; nothing to upload.")
-
-            dag = context.get("dag")
-            dag_id_val = getattr(dag, "dag_id", None) or "manual"
-
-            logger.info(
-                "Upload start %s -> blob (table=%s)",
-                parquet_path,
-                cfg["table"],
+            upload = PythonOperator(
+                task_id=f"upload_{suffix}",
+                python_callable=upload_to_azure_blob_callable,
+                op_kwargs={
+                    "cfg": cfg,
+                    "extract_task_id": extract_task_id,
+                },
             )
-            try:
-                exporter = AzureExportConnector(
-                    connection_id_export=cfg["connection_id_export"],
-                    database=cfg["database"],
-                    schema=cfg["schema"],
-                    table=cfg["table"],
-                    container_name=dag_id_val,
-                    delete_local=True,
-                )
-                blob_uri = exporter.upload(
-                    local_parquet_path=parquet_path,
-                    **context,
-                )
-            except AirflowException:
-                raise
-            except Exception as exc:
-                logger.exception("Unexpected error in upload task")
-                raise AirflowException(f"Upload task crashed: {exc}") from exc
+            extract >> upload
 
-            logger.info("Upload succeeded: %s", blob_uri)
-            return blob_uri
-
-        parquet_paths = extract_to_parquet.expand(cfg=table_configs)
-        upload_to_azure_blob.expand(cfg=table_configs, parquet_path=parquet_paths)
-
-    return _parallel_etl()
+    return dag
 
 
 business_line1_monthly = _build_parallel_blob_dag(
