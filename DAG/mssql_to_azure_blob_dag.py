@@ -1,16 +1,8 @@
 from __future__ import annotations
 
 import logging
-import re
-import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
-
-# connector_class/ lives one level above this DAG folder; make it importable.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
 
 from airflow import DAG
 from airflow.exceptions import AirflowException
@@ -31,12 +23,6 @@ default_args = {
     "email_on_failure": False,
     "email_on_retry": False,
 }
-
-
-def _safe_task_suffix(cfg: dict[str, Any], index: int) -> str:
-    raw = str(cfg.get("name") or cfg.get("table") or f"table_{index}")
-    safe = re.sub(r"[^0-9A-Za-z._-]+", "_", raw).strip("._-") or f"idx_{index}"
-    return safe
 
 
 def extract_to_parquet_callable(
@@ -136,8 +122,8 @@ def _build_parallel_blob_dag(
     landing_partition_prefix: str,
 ) -> DAG:
     """
-    Classic DAG: ``with DAG(...)`` plus one ``PythonOperator`` extract and one
-    ``PythonOperator`` upload per table config; branches run in parallel.
+    Per table: ``extract_{i}`` -> ``export_{i}`` (XCom parquet path). All
+    branches are independent and run in parallel within the DAG.
     """
     with DAG(
         dag_id=dag_id,
@@ -152,8 +138,7 @@ def _build_parallel_blob_dag(
         max_active_runs=1,
     ) as dag:
         for i, cfg in enumerate(table_configs):
-            suffix = _safe_task_suffix(cfg, i)
-            extract_task_id = f"extract_{suffix}"
+            extract_task_id = f"extract_{i}"
             extract = PythonOperator(
                 task_id=extract_task_id,
                 python_callable=extract_to_parquet_callable,
@@ -162,15 +147,15 @@ def _build_parallel_blob_dag(
                     "landing_partition_prefix": landing_partition_prefix,
                 },
             )
-            upload = PythonOperator(
-                task_id=f"upload_{suffix}",
+            export = PythonOperator(
+                task_id=f"export_{i}",
                 python_callable=upload_to_azure_blob_callable,
                 op_kwargs={
                     "cfg": cfg,
                     "extract_task_id": extract_task_id,
                 },
             )
-            extract >> upload
+            extract >> export
 
     return dag
 
