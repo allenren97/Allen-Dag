@@ -24,7 +24,6 @@ class AzureExportConnector(BaseConnector):
         self,
         connection_id_export: str,
         database: str,
-        schema: str,
         table: str,
         container_name: Optional[str] = None,
         overwrite: bool = True,
@@ -33,7 +32,6 @@ class AzureExportConnector(BaseConnector):
         super().__init__(
             connection_id=connection_id_export,
             database=database,
-            schema=schema,
             table=table,
         )
         self.container_name = (container_name or self.DEFAULT_CONTAINER).strip()
@@ -67,9 +65,7 @@ class AzureExportConnector(BaseConnector):
 
     def _build_blob_name(self, local_path: Path, **context: Any) -> str:
         dag_id = self._get_dag_id(**context)
-        return "/".join(
-            [dag_id, self.database, self.schema, self.table, local_path.name]
-        )
+        return "/".join([dag_id, self.database, self.table, local_path.name])
 
     def _ensure_container(self, hook) -> None:
         try:
@@ -138,7 +134,6 @@ class AzureExportConnector(BaseConnector):
                 local.unlink()
                 self.logger.info("Removed local file %s after upload", local)
             except OSError as cleanup_exc:
-                # Cleanup failure shouldn't fail the task; just warn.
                 self.logger.warning(
                     "Could not remove local file %s after upload: %s",
                     local,

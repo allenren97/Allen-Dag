@@ -1,0 +1,6 @@
+engine: db2
+connection_id_import: db2_conn
+connection_id_export: azure-sas
+database: database
+table: TM_DIM
+predicate: null

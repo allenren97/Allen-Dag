@@ -3,6 +3,8 @@ apache-airflow-providers-microsoft-mssql==3.9.2
 apache-airflow-providers-microsoft-azure==10.5.1
 pandas==2.2.3
 pyarrow==17.0.0
+PyYAML==6.0.2
+openpyxl==3.1.5
 
 # Optional — only needed for engine "db2" extract tasks:
 # airflow-provider-ibm-db2

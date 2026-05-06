@@ -1,0 +1,6 @@
+engine: mssql
+connection_id_import: sda_sql
+connection_id_export: azure-sas
+database: TLCDW
+table: ALLBehaviorScore
+predicate: predicate1

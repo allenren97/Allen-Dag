@@ -18,10 +18,7 @@ class MSSQLImportConnector(BaseConnector):
     in Airflow with type ``mssql``.
     """
 
-    # Default landing zone: <project_root>/data, where <project_root> is the
-    # folder that contains both connector_class/ and DAG/. Can be overridden
-    # by setting the AIRFLOW_LANDING_DIR environment variable.
-    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     LANDING_DIR = Path(
         os.environ.get("AIRFLOW_LANDING_DIR", _PROJECT_ROOT / "data")
     )
@@ -30,7 +27,6 @@ class MSSQLImportConnector(BaseConnector):
         self,
         connection_id_import: str,
         database: str,
-        schema: str,
         table: str,
         predicate: Optional[str] = None,
         landing_partition_prefix: Optional[str] = None,
@@ -38,7 +34,6 @@ class MSSQLImportConnector(BaseConnector):
         super().__init__(
             connection_id=connection_id_import,
             database=database,
-            schema=schema,
             table=table,
         )
         self.predicate = predicate.strip() if predicate else None
@@ -47,14 +42,12 @@ class MSSQLImportConnector(BaseConnector):
         )
 
     def _build_query(self) -> str:
-        query = f"SELECT * FROM [{self.schema}].[{self.table}]"
+        query = f"SELECT * FROM [{self.table}]"
         if self.predicate:
             query += f" WHERE {self.predicate}"
         return query
 
     def _get_hook(self):
-        # Imported lazily so importing this module doesn't require the provider
-        # at parse time (helps unit tests + makes import errors clearer).
         try:
             from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
         except ImportError as exc:
@@ -83,7 +76,6 @@ class MSSQLImportConnector(BaseConnector):
                 / self.landing_partition_prefix
                 / ds
                 / self.database
-                / self.schema
             )
             out_dir.mkdir(parents=True, exist_ok=True)
             return out_dir / f"{self.table}_{ts_nodash}.parquet"

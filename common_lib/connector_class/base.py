@@ -8,7 +8,7 @@ class BaseConnector(ABC):
     """
     Shared functionality for import/export connectors.
 
-    Validates the common identifiers (connection_id / database / schema / table)
+    Validates the common identifiers (connection_id / database / table)
     once and provides a per-instance logger plus a fully-qualified table name
     helper so subclasses don't have to re-implement either.
     """
@@ -17,7 +17,6 @@ class BaseConnector(ABC):
         self,
         connection_id: str,
         database: str,
-        schema: str,
         table: str,
     ) -> None:
         missing = [
@@ -25,7 +24,6 @@ class BaseConnector(ABC):
             for name, value in (
                 ("connection_id", connection_id),
                 ("database", database),
-                ("schema", schema),
                 ("table", table),
             )
             if not value or not str(value).strip()
@@ -37,14 +35,13 @@ class BaseConnector(ABC):
 
         self.connection_id = connection_id
         self.database = database
-        self.schema = schema
         self.table = table
         self.logger = logging.getLogger(self.__class__.__name__)
 
     @property
     def fqtn(self) -> str:
-        """Fully-qualified table name, e.g. AdventureWorks.Sales.Customers."""
-        return f"{self.database}.{self.schema}.{self.table}"
+        """Fully-qualified table name, e.g. AdventureWorks.Customers."""
+        return f"{self.database}.{self.table}"
 
     def __repr__(self) -> str:
         return (
