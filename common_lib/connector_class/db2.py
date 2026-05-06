@@ -20,6 +20,8 @@ class DB2ImportConnector(BaseConnector):
     your provider, commonly ``db2`` / ``Db2``).
     """
 
+    ENGINE = "db2"
+
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     LANDING_DIR = Path(
         os.environ.get("AIRFLOW_LANDING_DIR", _PROJECT_ROOT / "data")

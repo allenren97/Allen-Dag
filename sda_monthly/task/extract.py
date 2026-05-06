@@ -8,10 +8,7 @@ import yaml
 from airflow.exceptions import AirflowException
 from airflow.operators.python import get_current_context
 
-from common_lib.connector_class import (
-    DB2ImportConnector,
-    MSSQLImportConnector,
-)
+from common_lib.connector_class import IMPORT_CONNECTORS
 
 
 UPSTREAM_TASKS: list[str] = []
@@ -26,36 +23,32 @@ def _load_cfg(yaml_path: str) -> dict[str, Any]:
 
 
 def extract(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
-    """Instantiate the right import connector for the given YAML and run it.
+    """Look up the import connector by ``engine`` and run it.
 
-    ``upstream_task_ids`` is supplied by ``build_table_taskgroup`` and maps
-    each name in ``UPSTREAM_TASKS`` to its fully-qualified Airflow task id.
-    Empty here because ``extract`` has no upstream tasks within the group.
+    The connector class is resolved from ``IMPORT_CONNECTORS`` (auto-registered
+    by every ``BaseConnector`` subclass that sets a non-empty ``ENGINE``),
+    so adding a new source database does not require editing this file.
     """
     del upstream_task_ids
     cfg = _load_cfg(yaml_path)
     context = get_current_context()
-    engine = str(cfg.get("engine") or "").lower().strip()
-    landing_partition_prefix = str(context.get("dag").dag_id) if context.get("dag") else None
+    engine = str(cfg.get("engine") or "").strip().lower()
 
-    if engine == "mssql":
-        importer = MSSQLImportConnector(
-            connection_id_import=cfg["connection_id_import"],
-            database=cfg["database"],
-            table=cfg["table"],
-            predicate=cfg.get("predicate"),
-            landing_partition_prefix=landing_partition_prefix,
-        )
-    elif engine == "db2":
-        importer = DB2ImportConnector(
-            connection_id_import=cfg["connection_id_import"],
-            database=cfg["database"],
-            table=cfg["table"],
-            predicate=cfg.get("predicate"),
-            landing_partition_prefix=landing_partition_prefix,
-        )
-    else:
+    connector_cls = IMPORT_CONNECTORS.get(engine)
+    if connector_cls is None:
         raise AirflowException(
-            f"Unsupported engine {engine!r} in {yaml_path}"
+            f"Unsupported engine {engine!r} in {yaml_path}; "
+            f"known engines: {sorted(IMPORT_CONNECTORS)}"
         )
+
+    landing_partition_prefix = (
+        str(context.get("dag").dag_id) if context.get("dag") else None
+    )
+    importer = connector_cls(
+        connection_id_import=cfg["connection_id_import"],
+        database=cfg["database"],
+        table=cfg["table"],
+        predicate=cfg.get("predicate"),
+        landing_partition_prefix=landing_partition_prefix,
+    )
     return importer.to_parquet(**context)

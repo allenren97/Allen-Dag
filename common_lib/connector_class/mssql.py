@@ -18,6 +18,8 @@ class MSSQLImportConnector(BaseConnector):
     in Airflow with type ``mssql``.
     """
 
+    ENGINE = "mssql"
+
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     LANDING_DIR = Path(
         os.environ.get("AIRFLOW_LANDING_DIR", _PROJECT_ROOT / "data")

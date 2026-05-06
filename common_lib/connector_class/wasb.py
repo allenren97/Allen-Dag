@@ -18,6 +18,8 @@ class AzureExportConnector(BaseConnector):
     type ``wasb``.
     """
 
+    EXPORT = "azure_blob"
+
     DEFAULT_CONTAINER = os.environ.get("AZURE_BLOB_CONTAINER", "raw")
 
     def __init__(
