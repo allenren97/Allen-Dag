@@ -12,6 +12,7 @@ YAML_FIELDS = (
     "connection_id_import",
     "connection_id_export",
     "database",
+    "schema",
     "table",
     "predicate",
 )

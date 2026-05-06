@@ -1,41 +1,62 @@
 """Auto-register import / export connectors via class attributes.
 
-To add a new **import** source (e.g. Oracle), drop a new file
-``common_lib/connector_class/<engine>.py`` that defines a subclass of
-``BaseConnector`` with::
+To add a new **import** source, drop a new file in this directory that
+defines a ``BaseImportConnector`` subclass with a non-empty ``ENGINE``::
 
-    class OracleImportConnector(BaseConnector):
+    from .base import BaseImportConnector
+
+    class OracleImportConnector(BaseImportConnector):
         ENGINE = "oracle"
-        ...
-        def to_parquet(self, **context) -> str: ...
+        def _build_query(self) -> str: ...
+        def _fetch_dataframe(self): ...
 
-To add a new **export** target (e.g. S3), drop a new file with::
+To add a new **export** target, drop a new file with a ``BaseConnector``
+subclass that declares a non-empty ``EXPORT``::
 
     class S3ExportConnector(BaseConnector):
         EXPORT = "s3"
-        ...
-        def upload(self, local_parquet_path: str, **context) -> str: ...
+        def upload(self, local_parquet_path, **context) -> str: ...
 
-Nothing else needs to change. The two registries below are rebuilt on
-import by walking every ``BaseConnector`` subclass that declares a
-non-empty ``ENGINE`` (import) or ``EXPORT`` (export). The generated
-``task/extract.py`` and ``task/upload.py`` look up the right class by
-name, so adding a new connector never requires editing the scaffold or
-any existing per-DAG task file.
+The two registries below are rebuilt on import by walking every
+``BaseConnector`` subclass that declares a non-empty ``ENGINE`` (import)
+or ``EXPORT`` (export). The generated ``task/extract.py`` and
+``task/upload.py`` look up the right class by name, so adding a connector
+never requires editing the scaffold or any existing per-DAG task file.
+
+Optional dependencies (e.g. ``ibm_db`` for DB2): if a sibling module
+fails to import because its native dependency is missing, the auto-loader
+logs a warning and skips it. Only the connectors whose deps are actually
+present end up in the registries.
 """
 from __future__ import annotations
 
 import importlib
+import logging
 import pkgutil
 
-from .base import BaseConnector
+from .base import BaseConnector, BaseImportConnector
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _autoload_submodules() -> None:
-    """Import every sibling module so subclass registration happens at import time."""
+    """Import every sibling module so subclasses register themselves.
+
+    Modules that fail to import (typically because an optional native /
+    Airflow-provider dependency isn't installed) are logged and skipped
+    so the package still loads with a usable subset of connectors.
+    """
     for _, modname, ispkg in pkgutil.iter_modules(__path__):
-        if not ispkg and modname != "base":
+        if ispkg or modname == "base":
+            continue
+        try:
             importlib.import_module(f"{__name__}.{modname}")
+        except Exception as exc:
+            _logger.warning(
+                "Skipping connector module %r — %s: %s",
+                modname, type(exc).__name__, exc,
+            )
 
 
 def _all_subclasses(cls: type) -> set[type]:
@@ -71,16 +92,15 @@ _autoload_submodules()
 IMPORT_CONNECTORS: dict[str, type[BaseConnector]] = _build_registry("ENGINE")
 EXPORT_CONNECTORS: dict[str, type[BaseConnector]] = _build_registry("EXPORT")
 
+_logger.info(
+    "Connector registries built: imports=%s, exports=%s",
+    sorted(IMPORT_CONNECTORS), sorted(EXPORT_CONNECTORS),
+)
 
-from .db2 import DB2ImportConnector  # noqa: E402
-from .mssql import MSSQLImportConnector  # noqa: E402
-from .wasb import AzureExportConnector  # noqa: E402
 
 __all__ = [
     "BaseConnector",
-    "DB2ImportConnector",
-    "MSSQLImportConnector",
-    "AzureExportConnector",
+    "BaseImportConnector",
     "IMPORT_CONNECTORS",
     "EXPORT_CONNECTORS",
 ]

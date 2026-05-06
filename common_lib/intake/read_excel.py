@@ -14,6 +14,7 @@ REQUIRED_COLUMNS = (
     "connection_id_import",
     "connection_id_export",
     "database",
+    "schema",
     "table",
 )
 

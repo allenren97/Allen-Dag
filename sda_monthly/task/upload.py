@@ -1,6 +1,7 @@
 """Upload task: pull the parquet from XCom and push it to the export target."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,8 @@ from common_lib.connector_class import EXPORT_CONNECTORS
 
 UPSTREAM_TASKS: list[str] = ["extract"]
 
+logger = logging.getLogger(__name__)
+
 
 def _load_cfg(yaml_path: str) -> dict[str, Any]:
     with Path(yaml_path).open("r") as fh:
@@ -23,12 +26,6 @@ def _load_cfg(yaml_path: str) -> dict[str, Any]:
 
 
 def _resolve_export_class(cfg: dict[str, Any], yaml_path: str) -> type:
-    """Pick the export connector class for this YAML.
-
-    * If the YAML sets ``export_engine: <name>``, use that one.
-    * Otherwise, if exactly one connector is registered, use it.
-    * Otherwise, fail with a clear error listing the candidates.
-    """
     explicit = str(cfg.get("export_engine") or "").strip().lower()
     if explicit:
         cls = EXPORT_CONNECTORS.get(explicit)
@@ -41,23 +38,14 @@ def _resolve_export_class(cfg: dict[str, Any], yaml_path: str) -> type:
     if len(EXPORT_CONNECTORS) == 1:
         return next(iter(EXPORT_CONNECTORS.values()))
     if not EXPORT_CONNECTORS:
-        raise AirflowException(
-            "No export connectors registered; cannot upload."
-        )
+        raise AirflowException("No export connectors registered; cannot upload.")
     raise AirflowException(
-        f"Multiple export connectors registered "
-        f"({sorted(EXPORT_CONNECTORS)}); add `export_engine:` to {yaml_path}."
+        f"Multiple export connectors registered ({sorted(EXPORT_CONNECTORS)}); "
+        f"add `export_engine:` to {yaml_path}."
     )
 
 
 def upload(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
-    """Pull the parquet path from the matching extract task and run the export.
-
-    The export connector class is resolved from ``EXPORT_CONNECTORS`` (auto-
-    registered by every ``BaseConnector`` subclass that sets a non-empty
-    ``EXPORT``), so adding a new export target does not require editing this
-    file.
-    """
     cfg = _load_cfg(yaml_path)
     context = get_current_context()
     ti = context["ti"]
@@ -72,11 +60,16 @@ def upload(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
     container_name = getattr(dag, "dag_id", None) or "manual"
 
     export_cls = _resolve_export_class(cfg, yaml_path)
+    logger.info(
+        "Building %s for %s.%s.%s -> container=%r",
+        export_cls.__name__,
+        cfg["database"], cfg["schema"], cfg["table"], container_name,
+    )
     exporter = export_cls(
         connection_id_export=cfg["connection_id_export"],
         database=cfg["database"],
+        schema=cfg["schema"],
         table=cfg["table"],
         container_name=container_name,
-        delete_local=True,
     )
     return exporter.upload(local_parquet_path=parquet_path, **context)

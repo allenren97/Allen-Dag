@@ -1,11 +1,11 @@
 """Write the per-DAG ``task/extract.py`` that reads a YAML and runs an import.
 
-This template is deliberately *engine-agnostic*. It imports
-``IMPORT_CONNECTORS`` (a ``{engine: connector_class}`` registry built by
+This template is engine-agnostic. It imports ``IMPORT_CONNECTORS`` (a
+``{engine: connector_class}`` registry built by
 ``common_lib/connector_class/__init__.py``) and dispatches by the YAML's
-``engine:`` field. Adding support for a new source database is therefore
-purely additive: drop a new ``common_lib/connector_class/<engine>.py``
-file with ``class XYZImportConnector(BaseConnector): ENGINE = "<engine>"``
+``engine`` field. Adding support for a new source database is purely
+additive — drop a new ``common_lib/connector_class/<engine>.py`` file
+with a ``BaseImportConnector`` subclass that sets ``ENGINE = "<engine>"``
 and the next DAG run picks it up. This template never needs to change.
 """
 from __future__ import annotations
@@ -17,6 +17,7 @@ _TEMPLATE = '''\
 """Extract task: read a table YAML and import to a local parquet file."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from common_lib.connector_class import IMPORT_CONNECTORS
 
 
 UPSTREAM_TASKS: list[str] = []
+
+logger = logging.getLogger(__name__)
 
 
 def _load_cfg(yaml_path: str) -> dict[str, Any]:
@@ -42,7 +45,7 @@ def extract(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
     """Look up the import connector by ``engine`` and run it.
 
     The connector class is resolved from ``IMPORT_CONNECTORS`` (auto-registered
-    by every ``BaseConnector`` subclass that sets a non-empty ``ENGINE``),
+    by every ``BaseImportConnector`` subclass that sets a non-empty ``ENGINE``),
     so adding a new source database does not require editing this file.
     """
     del upstream_task_ids
@@ -57,15 +60,17 @@ def extract(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
             f"known engines: {sorted(IMPORT_CONNECTORS)}"
         )
 
-    landing_partition_prefix = (
-        str(context.get("dag").dag_id) if context.get("dag") else None
+    logger.info(
+        "Building %s for %s.%s.%s (predicate=%r)",
+        connector_cls.__name__,
+        cfg["database"], cfg["schema"], cfg["table"], cfg.get("predicate"),
     )
     importer = connector_cls(
         connection_id_import=cfg["connection_id_import"],
         database=cfg["database"],
+        schema=cfg["schema"],
         table=cfg["table"],
         predicate=cfg.get("predicate"),
-        landing_partition_prefix=landing_partition_prefix,
     )
     return importer.to_parquet(**context)
 '''

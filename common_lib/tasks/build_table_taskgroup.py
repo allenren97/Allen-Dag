@@ -17,12 +17,16 @@ this file does not need to change.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from types import ModuleType
 
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_module_from_path(module_name: str, path: Path) -> ModuleType:
@@ -91,7 +95,16 @@ def build_table_taskgroup(yaml_path: Path) -> TaskGroup:
     dag_dir = yaml_path.parent.parent
     task_dir = dag_dir / "task"
 
+    logger.info(
+        "Building TaskGroup %r in DAG %r from %s",
+        table, dag_dir.name, yaml_path,
+    )
+
     specs = _discover_task_modules(task_dir, dag_dir.name)
+    logger.info(
+        "Discovered %d task module(s) in %s: %s",
+        len(specs), task_dir, sorted(specs),
+    )
 
     declared = set(specs)
     for name, (_, ups) in specs.items():
@@ -102,10 +115,13 @@ def build_table_taskgroup(yaml_path: Path) -> TaskGroup:
                 f"known tasks: {sorted(declared)}"
             )
 
+    ordered = _topo_sort(specs)
+    logger.info("Topological order for TaskGroup %r: %s", table, ordered)
+
     with TaskGroup(group_id=table) as group:
         operators: dict[str, PythonOperator] = {}
 
-        for name in _topo_sort(specs):
+        for name in ordered:
             module, upstream_names = specs[name]
             upstream_task_ids = {
                 u: operators[u].task_id for u in upstream_names
@@ -121,5 +137,9 @@ def build_table_taskgroup(yaml_path: Path) -> TaskGroup:
             for u in upstream_names:
                 operators[u] >> op
             operators[name] = op
+            logger.info(
+                "Wired %s.%s upstream=%s",
+                table, name, upstream_names or "[]",
+            )
 
     return group
