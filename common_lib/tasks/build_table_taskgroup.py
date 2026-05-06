@@ -1,17 +1,18 @@
-"""Build the ``extract -> upload`` TaskGroup for a single table YAML.
+"""Build a TaskGroup for a single table YAML by *reading* the wiring from
+each ``task/<name>.py`` module.
 
-Each generated DAG folder owns its own ``task/extract.py`` and
-``task/upload.py``. This builder loads those modules by file path so that the
-DAG-level ``dag.py`` stays a one-line loop and the per-DAG task files remain
-the obvious, editable entrypoint when someone is reading a single DAG folder.
+Each generated DAG folder owns its own ``task/<name>.py`` files. Every task
+module declares two things:
 
-Today the shape inside the group is::
+1. A callable named the same as the file (``extract.py`` -> ``def extract(...)``).
+2. A module-level list ``UPSTREAM_TASKS: list[str]`` listing the other task
+   names within the same group it depends on.
 
-    [upstream...] >> extract >> [downstream...]
-
-with ``upstream = []`` and ``downstream = [upload]``. The lists are explicit
-so that future tables can fan out (e.g. ``extract >> [upload, validate]``)
-without changing the wiring code below.
+The builder discovers every ``*.py`` in ``task/``, reads ``UPSTREAM_TASKS``
+from each, topologically sorts them, and wires the operators. To grow the
+graph (e.g. one ``extract`` fanning out to ``upload`` and ``validate``) you
+only add a new ``task/<name>.py`` file with the right ``UPSTREAM_TASKS``;
+this file does not need to change.
 """
 from __future__ import annotations
 
@@ -20,7 +21,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from airflow.models.baseoperator import BaseOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
 
@@ -37,57 +37,89 @@ def _load_module_from_path(module_name: str, path: Path) -> ModuleType:
     return module
 
 
+def _discover_task_modules(
+    task_dir: Path, dag_name: str
+) -> dict[str, tuple[ModuleType, list[str]]]:
+    """
+    Returns ``{task_name: (module, upstream_task_names)}`` for every
+    ``task/*.py`` (excluding ``__init__.py``).
+
+    Each module must define a callable matching its filename stem and may
+    define a module-level ``UPSTREAM_TASKS: list[str]`` (defaults to empty).
+    """
+    specs: dict[str, tuple[ModuleType, list[str]]] = {}
+    for py_path in sorted(task_dir.glob("*.py")):
+        if py_path.name == "__init__.py":
+            continue
+        name = py_path.stem
+        mod = _load_module_from_path(f"_dag_task_{dag_name}_{name}", py_path)
+        if not callable(getattr(mod, name, None)):
+            raise ImportError(
+                f"{py_path} must define a callable named {name!r}"
+            )
+        upstream = list(getattr(mod, "UPSTREAM_TASKS", []) or [])
+        specs[name] = (mod, upstream)
+    return specs
+
+
+def _topo_sort(specs: dict[str, tuple[ModuleType, list[str]]]) -> list[str]:
+    """Return task names in dependency order (upstream tasks first)."""
+    pending = {name: list(ups) for name, (_, ups) in specs.items()}
+    ordered: list[str] = []
+    while pending:
+        ready = sorted(name for name, ups in pending.items() if not ups)
+        if not ready:
+            raise RuntimeError(
+                f"Cycle or missing upstream in task graph: {pending!r}"
+            )
+        for name in ready:
+            del pending[name]
+            ordered.append(name)
+        for ups in pending.values():
+            ups[:] = [u for u in ups if u not in ordered]
+    return ordered
+
+
 def build_table_taskgroup(yaml_path: Path) -> TaskGroup:
     """
     Given ``<dag>/table/<table>.yaml``, build a TaskGroup named ``<table>``
-    containing ``extract`` and ``upload`` PythonOperators wired in series.
+    whose shape is dictated by the ``UPSTREAM_TASKS`` declarations inside
+    each ``<dag>/task/*.py`` module.
     """
     yaml_path = Path(yaml_path)
     table = yaml_path.stem
     dag_dir = yaml_path.parent.parent
     task_dir = dag_dir / "task"
 
-    extract_mod = _load_module_from_path(
-        f"_dag_task_{dag_dir.name}_extract",
-        task_dir / "extract.py",
-    )
-    upload_mod = _load_module_from_path(
-        f"_dag_task_{dag_dir.name}_upload",
-        task_dir / "upload.py",
-    )
+    specs = _discover_task_modules(task_dir, dag_dir.name)
+
+    declared = set(specs)
+    for name, (_, ups) in specs.items():
+        unknown = [u for u in ups if u not in declared]
+        if unknown:
+            raise RuntimeError(
+                f"Task {name!r} declares unknown UPSTREAM_TASKS {unknown!r}; "
+                f"known tasks: {sorted(declared)}"
+            )
 
     with TaskGroup(group_id=table) as group:
-        # ── upstream tasks (run BEFORE extract) ───────────────────────────
-        # Add pre-extract operators here, e.g. source-readiness sensors or
-        # schema/predicate validators. Every entry is wired as an upstream
-        # of ``extract_op`` below.
-        upstream_tasks: list[BaseOperator] = []
+        operators: dict[str, PythonOperator] = {}
 
-        # ── extract (the single fan-in / fan-out point) ───────────────────
-        extract_op = PythonOperator(
-            task_id="extract",
-            python_callable=extract_mod.extract,
-            op_kwargs={"yaml_path": str(yaml_path)},
-        )
-
-        # ── downstream tasks (run AFTER extract) ──────────────────────────
-        # Add post-extract operators here, e.g. additional uploads, row-count
-        # validation, notifications. Every entry is wired as a downstream of
-        # ``extract_op`` (so ``extract`` fans out to all of them in parallel).
-        upload_op = PythonOperator(
-            task_id="upload",
-            python_callable=upload_mod.upload,
-            op_kwargs={
-                "yaml_path": str(yaml_path),
-                "extract_task_id": extract_op.task_id,
-            },
-        )
-        downstream_tasks: list[BaseOperator] = [upload_op]
-
-        # ── wiring ────────────────────────────────────────────────────────
-        for up in upstream_tasks:
-            up >> extract_op
-        for down in downstream_tasks:
-            extract_op >> down
+        for name in _topo_sort(specs):
+            module, upstream_names = specs[name]
+            upstream_task_ids = {
+                u: operators[u].task_id for u in upstream_names
+            }
+            op = PythonOperator(
+                task_id=name,
+                python_callable=getattr(module, name),
+                op_kwargs={
+                    "yaml_path": str(yaml_path),
+                    "upstream_task_ids": upstream_task_ids,
+                },
+            )
+            for u in upstream_names:
+                operators[u] >> op
+            operators[name] = op
 
     return group

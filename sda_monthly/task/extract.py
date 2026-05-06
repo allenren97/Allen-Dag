@@ -14,6 +14,9 @@ from common_lib.connector_class import (
 )
 
 
+UPSTREAM_TASKS: list[str] = []
+
+
 def _load_cfg(yaml_path: str) -> dict[str, Any]:
     with Path(yaml_path).open("r") as fh:
         cfg = yaml.safe_load(fh) or {}
@@ -22,8 +25,14 @@ def _load_cfg(yaml_path: str) -> dict[str, Any]:
     return cfg
 
 
-def extract(yaml_path: str) -> str:
-    """Instantiate the right import connector for the given YAML and run it."""
+def extract(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
+    """Instantiate the right import connector for the given YAML and run it.
+
+    ``upstream_task_ids`` is supplied by ``build_table_taskgroup`` and maps
+    each name in ``UPSTREAM_TASKS`` to its fully-qualified Airflow task id.
+    Empty here because ``extract`` has no upstream tasks within the group.
+    """
+    del upstream_task_ids
     cfg = _load_cfg(yaml_path)
     context = get_current_context()
     engine = str(cfg.get("engine") or "").lower().strip()

@@ -11,6 +11,9 @@ from airflow.operators.python import get_current_context
 from common_lib.connector_class import AzureExportConnector
 
 
+UPSTREAM_TASKS: list[str] = ["extract"]
+
+
 def _load_cfg(yaml_path: str) -> dict[str, Any]:
     with Path(yaml_path).open("r") as fh:
         cfg = yaml.safe_load(fh) or {}
@@ -19,11 +22,17 @@ def _load_cfg(yaml_path: str) -> dict[str, Any]:
     return cfg
 
 
-def upload(yaml_path: str, extract_task_id: str) -> str:
-    """Pull parquet path from the matching extract task and upload to blob."""
+def upload(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
+    """Pull parquet path from the matching extract task and upload to blob.
+
+    ``upstream_task_ids`` maps each entry in ``UPSTREAM_TASKS`` to the
+    fully-qualified Airflow task id that ``build_table_taskgroup`` created,
+    so XCom lookups work regardless of the enclosing TaskGroup name.
+    """
     cfg = _load_cfg(yaml_path)
     context = get_current_context()
     ti = context["ti"]
+    extract_task_id = upstream_task_ids["extract"]
     parquet_path = ti.xcom_pull(task_ids=extract_task_id)
     if not parquet_path:
         raise AirflowException(
