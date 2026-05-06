@@ -1,68 +1,14 @@
-"""Connector base classes.
-
-``BaseConnector``        — shared by every import / export connector.
-``BaseImportConnector``  — intermediate base for connectors that fetch a
-                           DataFrame from a source and write it to parquet
-                           (MSSQL, DB2, future Oracle / Postgres / …).
-
-Each concrete import connector only has to declare ``ENGINE`` and override
-``_build_query`` + ``_fetch_dataframe``. Path resolution, parquet writing,
-tmp-file cleanup, and step-by-step logging all live here.
-"""
+"""Base class for connectors that fetch a DataFrame and write it to parquet."""
 from __future__ import annotations
 
-import logging
 import os
-from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 from airflow.exceptions import AirflowException
 
-
-class BaseConnector(ABC):
-    """Common identifiers + logger for every connector (import or export)."""
-
-    def __init__(
-        self,
-        connection_id: str,
-        database: str,
-        schema: str,
-        table: str,
-    ) -> None:
-        missing = [
-            name
-            for name, value in (
-                ("connection_id", connection_id),
-                ("database", database),
-                ("schema", schema),
-                ("table", table),
-            )
-            if not value or not str(value).strip()
-        ]
-        if missing:
-            raise ValueError(
-                f"BaseConnector is missing required argument(s): {', '.join(missing)}"
-            )
-
-        self.connection_id = connection_id
-        self.database = database
-        self.schema = schema
-        self.table = table
-        self.logger = logging.getLogger(self.__class__.__name__)
-
-    @property
-    def full_table_name(self) -> str:
-        """Fully-qualified table name, e.g. ``Database.Schema.Table``."""
-        return f"{self.database}.{self.schema}.{self.table}"
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}("
-            f"connection_id={self.connection_id!r}, "
-            f"full_table_name={self.full_table_name!r})"
-        )
+from .connector import BaseConnector
 
 
 class BaseImportConnector(BaseConnector):

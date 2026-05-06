@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .base import BaseImportConnector
+from .bases import BaseImportConnector
 
 
 class MSSQLImportConnector(BaseImportConnector):

@@ -1,27 +1,19 @@
 """Auto-register import / export connectors via class attributes.
 
-To add a new **import** source, drop a new file in this directory that
-defines a ``BaseImportConnector`` subclass with a non-empty ``ENGINE``::
+Layout:
 
-    from .base import BaseImportConnector
+* ``bases/`` — root + import + export base classes (one file each). The
+  auto-loader skips this subpackage; bases never appear in the registries
+  because they don't declare ``ENGINE`` or ``EXPORT``.
+* ``<engine>.py`` (e.g. ``mssql.py``, ``db2.py``, ``wasb.py``) — concrete
+  connectors. Each declares either ``ENGINE = "<name>"`` (import) or
+  ``EXPORT = "<name>"`` (export) so it shows up in the right registry.
 
-    class OracleImportConnector(BaseImportConnector):
-        ENGINE = "oracle"
-        def _build_query(self) -> str: ...
-        def _fetch_dataframe(self): ...
-
-To add a new **export** target, drop a new file with a ``BaseConnector``
-subclass that declares a non-empty ``EXPORT``::
-
-    class S3ExportConnector(BaseConnector):
-        EXPORT = "s3"
-        def upload(self, local_parquet_path, **context) -> str: ...
-
-The two registries below are rebuilt on import by walking every
-``BaseConnector`` subclass that declares a non-empty ``ENGINE`` (import)
-or ``EXPORT`` (export). The generated ``task/extract.py`` and
-``task/upload.py`` look up the right class by name, so adding a connector
-never requires editing the scaffold or any existing per-DAG task file.
+To add a new **import** source, drop a new file alongside ``mssql.py``
+that defines a ``BaseImportConnector`` subclass with a non-empty
+``ENGINE``. To add a new **export** target, drop a new file alongside
+``wasb.py`` that defines a ``BaseExportConnector`` subclass with a
+non-empty ``EXPORT``.
 
 Optional dependencies (e.g. ``ibm_db`` for DB2): if a sibling module
 fails to import because its native dependency is missing, the auto-loader
@@ -34,21 +26,23 @@ import importlib
 import logging
 import pkgutil
 
-from .base import BaseConnector, BaseImportConnector
+from .bases import BaseConnector, BaseExportConnector, BaseImportConnector
 
 
 _logger = logging.getLogger(__name__)
 
 
 def _autoload_submodules() -> None:
-    """Import every sibling module so subclasses register themselves.
+    """Import every concrete sibling module so subclasses register themselves.
 
-    Modules that fail to import (typically because an optional native /
-    Airflow-provider dependency isn't installed) are logged and skipped
-    so the package still loads with a usable subset of connectors.
+    Subpackages (such as ``bases/``) are skipped — they don't contain
+    concrete connectors. Modules that fail to import (typically because
+    an optional native / Airflow-provider dependency isn't installed)
+    are logged and skipped so the package still loads with a usable
+    subset of connectors.
     """
     for _, modname, ispkg in pkgutil.iter_modules(__path__):
-        if ispkg or modname == "base":
+        if ispkg:
             continue
         try:
             importlib.import_module(f"{__name__}.{modname}")
@@ -100,6 +94,7 @@ _logger.info(
 
 __all__ = [
     "BaseConnector",
+    "BaseExportConnector",
     "BaseImportConnector",
     "IMPORT_CONNECTORS",
     "EXPORT_CONNECTORS",

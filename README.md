@@ -45,14 +45,17 @@ and nothing else changes.
 ├── README.md
 ├── common_lib/                        # generic, reusable code
 │   ├── connector_class/
-│   │   ├── base.py                    # BaseConnector (ABC) + BaseImportConnector
-│   │   │                              # (template-method to_parquet, shared landing path)
+│   │   ├── bases/                     # base classes (one per file)
+│   │   │   ├── connector.py           #   BaseConnector — root identity layer
+│   │   │   ├── import_connector.py    #   BaseImportConnector — template-method to_parquet
+│   │   │   └── export_connector.py    #   BaseExportConnector — template-method upload
 │   │   ├── mssql.py                   # MSSQLImportConnector (ENGINE = "mssql")
 │   │   ├── db2.py                     # DB2ImportConnector   (ENGINE = "db2")
 │   │   ├── wasb.py                    # AzureExportConnector (EXPORT = "azure_blob")
-│   │   └── __init__.py                # auto-discovers connectors → IMPORT_CONNECTORS,
-│   │                                  #                              EXPORT_CONNECTORS
-│   │                                  # (skips modules whose optional deps are missing)
+│   │   └── __init__.py                # auto-discovers concrete connectors →
+│   │                                  #   IMPORT_CONNECTORS / EXPORT_CONNECTORS
+│   │                                  # (skips bases/ subpackage and any modules
+│   │                                  #  whose optional deps are missing)
 │   ├── intake/
 │   │   ├── read_excel.py              # parse the xlsx into normalized row dicts
 │   │   └── group_by_dag.py            # bucket rows by (business_line, cadence)
@@ -223,21 +226,29 @@ This is what makes "dropping a new connector file" a self-contained change.
 
 ### Class hierarchy
 
+Each base class lives in its own file under `connector_class/bases/`:
+
 ```text
 BaseConnector (ABC)                 connection_id, database, schema, table,
-│                                   full_table_name, logger
+│   bases/connector.py              full_table_name, logger
 │
 ├── BaseImportConnector             LANDING_DIR, predicate
-│   │                               _resolve_output_path(...)
+│   │   bases/import_connector.py   _resolve_output_path(...)
 │   │                               to_parquet(**context)        ← template method
 │   │                               _build_query()                ← override per engine
 │   │                               _fetch_dataframe()            ← override per engine
 │   │
-│   ├── MSSQLImportConnector        ENGINE = "mssql"
-│   └── DB2ImportConnector          ENGINE = "db2"
+│   ├── MSSQLImportConnector        ENGINE = "mssql"           (mssql.py)
+│   └── DB2ImportConnector          ENGINE = "db2"             (db2.py)
 │
-└── AzureExportConnector            EXPORT = "azure_blob"
-                                    upload(local_parquet_path, **context)
+└── BaseExportConnector             DEFAULT_CONTAINER, container_name,
+    │   bases/export_connector.py   overwrite, delete_local
+    │                               _build_blob_name(local, **context)
+    │                               upload(local_parquet_path, **context)  ← template method
+    │                               _build_target_uri(blob_name)            ← override per engine
+    │                               _upload_to_target(local, blob_name, **context) ← override
+    │
+    └── AzureExportConnector        EXPORT = "azure_blob"     (wasb.py)
 ```
 
 `to_parquet` lives in `BaseImportConnector` and runs the same orchestration
@@ -245,6 +256,13 @@ for every engine: build query → fetch DataFrame → write parquet to a tmp
 file → atomic rename → return path. Per-engine subclasses only have to
 know how to *quote* their identifiers (`_build_query`) and how to *fetch*
 (`_fetch_dataframe`).
+
+`upload` lives in `BaseExportConnector` and runs the same orchestration
+for every target: validate the local file → derive the blob name → call
+the engine-specific transfer → log → optional `delete_local`. Per-target
+subclasses only have to implement how to *describe* the destination
+(`_build_target_uri`) and how to *transfer* the bytes
+(`_upload_to_target`).
 
 ---
 
@@ -483,8 +501,15 @@ connectors.
 
 ## Adding a new export connector
 
-The same pattern as imports, but with an `EXPORT` class attribute and the
-`EXPORT_CONNECTORS` registry.
+Goal: support a new export target (S3, GCS, NFS, …) without editing any
+scaffold templates or generated DAG files.
+
+`BaseExportConnector` already does all of the orchestration: validate the
+local parquet file, derive a blob name from
+`<dag_id>/<database>/<schema>/<table>/<filename>`, log start/end of the
+upload, and optionally delete the local file after a successful upload.
+A new export only has to plug in two engine-specific things — *how to
+describe the destination* and *how to transfer the bytes*.
 
 ### Step 1 — create the export connector class
 
@@ -493,57 +518,41 @@ The same pattern as imports, but with an `EXPORT` class attribute and the
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from .base import BaseConnector
+from .bases import BaseExportConnector
 
 
-class S3ExportConnector(BaseConnector):
-    """Upload a local parquet file to Amazon S3."""
+class S3ExportConnector(BaseExportConnector):
 
     EXPORT = "s3"
 
-    def __init__(
-        self,
-        connection_id_export: str,
-        database: str,
-        schema: str,
-        table: str,
-        container_name: Optional[str] = None,   # interpreted as bucket name
-        overwrite: bool = True,
-    ) -> None:
-        super().__init__(
-            connection_id=connection_id_export,
-            database=database,
-            schema=schema,
-            table=table,
-        )
-        self.bucket_name = container_name
-        self.overwrite = overwrite
+    # If you want a default bucket name, point this at an env var:
+    # DEFAULT_CONTAINER = os.environ.get("S3_BUCKET", "")
 
-    def upload(self, local_parquet_path: str, **context: Any) -> str:
+    def _build_target_uri(self, blob_name: str) -> str:
+        return f"s3://{self.container_name}/{blob_name}"
+
+    def _upload_to_target(
+        self, local: Path, blob_name: str, **context: Any
+    ) -> None:
         # Lazy import: keeps the package importable when the AWS provider
         # isn't installed in the current environment.
         from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
-        local = Path(local_parquet_path)
         hook = S3Hook(aws_conn_id=self.connection_id)
-        key = "/".join([self.database, self.schema, self.table, local.name])
-
-        self.logger.info(
-            "Uploading %s -> s3://%s/%s (overwrite=%s)",
-            local, self.bucket_name, key, self.overwrite,
-        )
         hook.load_file(
             filename=str(local),
-            bucket_name=self.bucket_name,
-            key=key,
+            bucket_name=self.container_name,
+            key=blob_name,
             replace=self.overwrite,
         )
-        uri = f"s3://{self.bucket_name}/{key}"
-        self.logger.info("Upload complete: %s", uri)
-        return uri
 ```
+
+That is the *complete* connector. File validation, the blob-name layout,
+"local file is empty / missing" errors, the upload-start/upload-complete
+log lines, and `delete_local` are all inherited from
+`BaseExportConnector`.
 
 ### Step 2 — declare it per-YAML
 
@@ -561,15 +570,22 @@ If the YAML omits `export_engine` but more than one is registered,
 
 | Element | Value |
 | --- | --- |
-| Base class | Subclass of `BaseConnector` |
+| Base class | Subclass of `BaseExportConnector` (in `common_lib/connector_class/bases/`) |
 | Class attribute | `EXPORT: str` — non-empty, unique, lowercase |
-| Constructor signature | `__init__(self, connection_id_export, database, schema, table, container_name=None, **engine_specific)` |
-| Method | `upload(self, local_parquet_path: str, **context) -> str` returning the destination URI |
+| Methods to override | `_build_target_uri(blob_name) -> str` and `_upload_to_target(local, blob_name, **context) -> None` |
+| Methods inherited (do **not** override unless you really need to) | `upload(local_parquet_path, **context)`, `_build_blob_name(...)`, the `__init__` signature |
+
+The constructor signature is fixed by `BaseExportConnector`:
+
+```python
+__init__(self, connection_id_export, database, schema, table,
+         container_name=None, overwrite=True, delete_local=False)
+```
 
 You're free to use `container_name` to mean whatever fits your target
 ("bucket", "filesystem prefix", etc.). Engine-specific knobs that aren't
-in this signature should be read from environment variables, the same
-way `AzureExportConnector` reads `AZURE_BLOB_CONTAINER`.
+in this signature should be read from environment variables — see
+`AzureExportConnector` reading `AZURE_BLOB_CONTAINER`.
 
 ---
 
