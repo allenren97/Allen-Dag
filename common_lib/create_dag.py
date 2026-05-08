@@ -1,8 +1,10 @@
 """Generate a ``<business_line>_<cadence>/`` folder for every group in the intake form.
 
-Non-destructive: any DAG folder that already exists is skipped untouched, so
-adding a new ``(business_line, cadence)`` row in the spreadsheet is the only
-way to scaffold a new DAG. Run as a script:
+Non-destructive and incremental: existing per-table YAMLs and the per-DAG
+``dag.py`` / ``task/*.py`` files are never overwritten. Adding a brand new
+``(business_line, cadence)`` row scaffolds the whole DAG folder; adding a
+new table row to a group whose folder already exists drops in just that
+table's YAML next to the existing ones. Run as a script:
 
     python -m common_lib.create_dag --intake "Business Requirement.xlsx"
 """
@@ -21,7 +23,13 @@ from common_lib.scaffold.write_upload_task import write_upload_task
 
 def generate(intake_path: Path, repo_root: Path) -> dict[str, str]:
     """
-    Returns ``{dag_id: status}`` where status is ``"created"`` or ``"skipped"``.
+    Returns ``{dag_id: status}`` where status is one of:
+
+    * ``"created"``  — the DAG folder did not exist; everything was scaffolded.
+    * ``"added: <t1>, <t2>"`` — the DAG folder already existed and one or
+      more new table YAMLs were added next to the existing ones.
+    * ``"skipped"``  — the DAG folder already existed and every table row
+      already had its YAML on disk; nothing was changed.
     """
     rows = read_intake_rows(intake_path)
     groups = group_by_dag(rows)
@@ -29,19 +37,30 @@ def generate(intake_path: Path, repo_root: Path) -> dict[str, str]:
     results: dict[str, str] = {}
     for dag_id, group_rows in groups.items():
         dag_dir = repo_root / dag_id
-        if dag_dir.exists():
-            results[dag_id] = "skipped"
-            continue
+        existed = dag_dir.exists()
+        dag_dir.mkdir(parents=True, exist_ok=True)
 
-        dag_dir.mkdir(parents=True)
+        added: list[str] = []
         for row in group_rows:
+            yaml_path = dag_dir / "table" / f"{row['table']}.yaml"
+            if yaml_path.exists():
+                continue
             write_table_yaml(dag_dir, row)
-        write_extract_task(dag_dir)
-        write_upload_task(dag_dir)
+            added.append(str(row["table"]))
 
-        cadence = group_rows[0]["cadence"]
-        write_dag_file(dag_dir, cadence)
-        results[dag_id] = "created"
+        if not (dag_dir / "task" / "extract.py").exists():
+            write_extract_task(dag_dir)
+        if not (dag_dir / "task" / "upload.py").exists():
+            write_upload_task(dag_dir)
+        if not (dag_dir / "dag.py").exists():
+            write_dag_file(dag_dir, group_rows[0]["cadence"])
+
+        if not existed:
+            results[dag_id] = "created"
+        elif added:
+            results[dag_id] = f"added: {', '.join(added)}"
+        else:
+            results[dag_id] = "skipped"
 
     return results
 

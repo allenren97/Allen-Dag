@@ -284,7 +284,7 @@ Pinned dependencies (see `requirements.txt`):
 - `pandas==2.2.3`
 - `pyarrow==17.0.0`
 - `PyYAML==6.0.2`
-- `openpyxl==3.1.5` — used by the intake reader
+- `openpyxl==3.1.5` — `.xlsx` backend used by pandas in the intake reader
 
 A DB2 import connector is included but not pinned by default; install
 `airflow-provider-ibm-db2` (or the Apache `airflow-providers-ibm` package)
