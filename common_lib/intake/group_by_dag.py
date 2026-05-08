@@ -18,8 +18,24 @@ def dag_id_for(row: dict[str, Any]) -> str:
 def group_by_dag(
     rows: list[dict[str, Any]],
 ) -> "OrderedDict[str, list[dict[str, Any]]]":
-    """Preserve first-seen order of DAG ids while bucketing the rows."""
+    """
+    Preserve first-seen order of DAG ids while bucketing the rows.
+
+    Raises ``ValueError`` if two rows share the same
+    ``(business_line, cadence, table)`` triple — every spreadsheet row
+    must map to a unique YAML on disk.
+    """
     groups: "OrderedDict[str, list[dict[str, Any]]]" = OrderedDict()
+    seen: set[tuple[str, str]] = set()
     for row in rows:
-        groups.setdefault(dag_id_for(row), []).append(row)
+        dag_id = dag_id_for(row)
+        table = str(row.get("table") or "").strip()
+        key = (dag_id, table)
+        if key in seen:
+            raise ValueError(
+                f"Duplicate intake row for dag_id={dag_id!r}, table={table!r}; "
+                "every (business_line, cadence, table) triple must be unique."
+            )
+        seen.add(key)
+        groups.setdefault(dag_id, []).append(row)
     return groups

@@ -26,6 +26,7 @@ and nothing else changes.
 2. [End-to-end flow](#end-to-end-flow)
 3. [Setup](#setup)
 4. [Generating DAG folders from the spreadsheet](#generating-dag-folders-from-the-spreadsheet)
+   - [Sync scenarios](#sync-scenarios)
 5. [Running the DAGs in Airflow](#running-the-dags-in-airflow)
 6. [Per-table YAML schema](#per-table-yaml-schema)
 7. [Adding a new import connector](#adding-a-new-import-connector)
@@ -135,9 +136,31 @@ and nothing else changes.
    - one `<dag_id>/table/<table>.yaml` per row (`write_table_yaml`)
    - `<dag_id>/task/extract.py` and `upload.py` from the scaffold templates
    - `<dag_id>/dag.py` (cadence → `@daily` / `@weekly` / `@monthly`)
+4. For each bucket whose folder **already exists**:
+   - new rows drop in the corresponding `<table>.yaml` next to the
+     existing ones;
+   - rows whose connector-relevant fields (`engine`,
+     `connection_id_*`, `database`, `schema`, `predicate`) drifted
+     away from the spreadsheet have their `<table>.yaml`
+     **rewritten** so the YAML matches the spreadsheet again;
+   - rows that are no longer in the spreadsheet have their
+     `<table>.yaml` **deleted** so the group stays in sync;
+   - the hand-tweakable scaffold pieces (`dag.py`, `task/*.py`) are
+     never overwritten.
+5. Any DAG folder on disk whose `(business_line, cadence)` group has
+   **disappeared from the spreadsheet** is treated as cancelled: the
+   whole folder (`dag.py`, `table/`, `task/`) is removed so Airflow
+   stops parsing the DAG on its next scan.
 
-The scaffolder is **non-destructive**: any folder that already exists is
-skipped untouched. To regenerate a DAG folder, `rm -rf` it and re-run.
+A DAG folder is identified by the presence of a top-level `dag.py`,
+so siblings like `common_lib/`, `.git/`, and any local data folders
+are never touched. To regenerate a DAG folder from scratch, `rm -rf`
+it and re-run.
+
+The spreadsheet is the sole source of truth for the contents of each
+`<table>.yaml`: edits to those YAMLs are **not** supported — change
+the spreadsheet and re-run. Use `--dry-run` to preview the changes
+before applying them.
 
 ### Phase 2 — DAG parse (every time Airflow scans the folder)
 
@@ -298,20 +321,78 @@ when you need it.
 python -m common_lib.create_dag --intake "Business Requirement.xlsx" --repo-root .
 ```
 
-CLI flags (both optional; defaults shown):
+CLI flags (all optional; defaults shown):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--intake` | `Business Requirement.xlsx` | Path to the intake xlsx |
 | `--repo-root` | `.` | Folder where DAG folders are created |
+| `--dry-run` | _off_ | Print the planned changes without modifying the filesystem. |
 
-Output is one line per DAG id, marked `created` or `skipped`:
+Output is one line per DAG id with one of these statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `created` | The DAG folder did not exist; everything was scaffolded. |
+| `added: <t1>, <t2>` | New table YAMLs were dropped into an existing group. |
+| `updated: <t1>, <t2>` | Existing table YAMLs whose connector-relevant fields drifted from the spreadsheet were rewritten to match. |
+| `removed: <t1>, <t2>` | Table YAMLs that no longer match a spreadsheet row were deleted from an existing group. |
+| `added: <…>; updated: <…>; removed: <…>` | Any combination of the above happened in the same group on this run. |
+| `cancelled` | The whole `(business_line, cadence)` group is gone from the spreadsheet; the DAG folder was removed. |
+| `skipped` | The DAG folder was already in sync with the spreadsheet; nothing was changed. |
+
+Typical no-op output:
 
 ```text
   rrap_weekly  skipped
   sda_daily    skipped
   sda_monthly  skipped
 ```
+
+### Sync scenarios
+
+The full set of cases the scaffolder handles, organized by what changed
+in the spreadsheet between two runs.
+
+#### Per-row scenarios (a single row in the spreadsheet)
+
+| Change in spreadsheet | What happens on disk | Status |
+| --- | --- | --- |
+| New row in a brand-new `(business_line, cadence)` group | The whole DAG folder is scaffolded: `dag.py`, `task/extract.py`, `task/upload.py`, and `table/<table>.yaml` | `created` |
+| New row in an already-existing group | A new `<table>.yaml` is dropped next to the existing ones | `added: <table>` |
+| Row's connector fields change (`engine`, `connection_id_import`, `connection_id_export`, `database`, `schema`, `predicate`) | The matching `<table>.yaml` is rewritten to match the spreadsheet | `updated: <table>` |
+| Row's `table` value changes (rename) | Treated as delete + add: old `<table>.yaml` is deleted, new one is written | `added: <new>; removed: <old>` |
+| Row's `business_line` or `cadence` changes (row migrates between groups) | Old group loses the YAML; new group gains it. If the move makes the old group empty, the old folder is cancelled. | `removed: <table>` in old group + `added: <table>` (or `created`) in new group, plus `cancelled` for the old group if it ends up empty |
+| Row deleted from spreadsheet | The matching `<table>.yaml` is deleted | `removed: <table>` |
+
+#### Per-group scenarios (a whole `(business_line, cadence)` bucket)
+
+| Change in spreadsheet | What happens on disk | Status |
+| --- | --- | --- |
+| New group appears | New DAG folder scaffolded end-to-end | `created` |
+| Group entirely disappears from the spreadsheet | The whole DAG folder (`dag.py`, `table/`, `task/`) is removed so Airflow stops parsing it | `cancelled` |
+| Group still present, no changes | Nothing happens | `skipped` |
+| Group has any combination of additions, content edits, and removals | Verbs are joined with `"; "` | e.g. `added: A; updated: B; removed: C` |
+
+#### Whole-spreadsheet scenarios
+
+| Situation | Behavior |
+| --- | --- |
+| Empty intake but DAG folders still exist on disk | Every existing DAG folder is `cancelled` |
+| Empty intake and no DAG folders on disk | Prints `Intake is empty; no DAGs to generate.` |
+| Two rows share the same `(business_line, cadence, table)` triple | Run is rejected with `ValueError: Duplicate intake row for dag_id='…', table='…'` before any filesystem change |
+| Required column missing from the spreadsheet header (`business_line`, `cadence`, `engine`, `connection_id_import`, `connection_id_export`, `database`, `schema`, `table`) | Run is rejected with `ValueError: Intake header is missing required column(s): […]` |
+
+#### CLI / safety scenarios
+
+| Action | Behavior |
+| --- | --- |
+| `python -m common_lib.create_dag --intake … --repo-root …` | Applies all the syncs above |
+| `--dry-run` | Same status report, but no `mkdir` / `write` / `unlink` / `rmtree` happens; useful for previewing destructive `cancelled` runs |
+| Sibling folders without a top-level `dag.py` (e.g. `common_lib/`, `.git/`, `data/`) | Never touched — the cancellation pass only considers folders that contain a `dag.py` |
+| Hand-edit to any generated YAML | Out of contract — the next run will overwrite it back to whatever the spreadsheet says |
+| Hand-edit to a generated `dag.py` or `task/*.py` in a surviving group | Preserved — those files are never overwritten in groups that survive |
+| `dag.py` / `task/*.py` in a `cancelled` group | Removed along with the rest of the folder |
 
 ### Required spreadsheet columns
 
@@ -708,6 +789,7 @@ same `table` name but different schemas / databases coexist on disk.
 | `ModuleNotFoundError: No module named 'common_lib'` | Run from the workspace root (the directory containing `common_lib/`). For Airflow, ensure `PYTHONPATH` or the dags-folder includes this root. |
 | DAG missing in Airflow UI | Check **DAG Import Errors** in the UI; usually a missing provider package or a typo in a YAML. |
 | `Intake header is missing required column(s): ['schema']` | The spreadsheet predates the `schema` column. Add a `schema` column and re-run the scaffolder. |
+| `Duplicate intake row for dag_id='…', table='…'` | Two spreadsheet rows share the same `(business_line, cadence, table)` triple. Each row maps to a single YAML, so the triple must be unique — fix the spreadsheet and re-run. |
 | `KeyError: 'schema'` from `extract.py`/`upload.py` | The YAML predates the `schema` field. Edit the YAML to add `schema:` (or delete the DAG folder and re-run `python -m common_lib.create_dag`). |
 | `Unsupported engine 'xyz'` from `extract.py` | The YAML's `engine` is not a registered `ENGINE`. Confirm the connector file exists in `common_lib/connector_class/` and its `ENGINE` attribute matches the YAML. Check the DAG-parse log line `Connector registries built: imports=[…]` to see what's actually registered. |
 | `Skipping connector module 'xyz' — ImportError: …` at startup | The auto-loader couldn't import that connector's optional native / provider dep. Install the dep, or remove the file if you don't need that engine. The package keeps loading without it. |

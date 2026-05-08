@@ -1,35 +1,83 @@
-"""Generate a ``<business_line>_<cadence>/`` folder for every group in the intake form.
+"""Sync the on-disk DAG folders to the rows in the business intake form.
 
-Non-destructive and incremental: existing per-table YAMLs and the per-DAG
-``dag.py`` / ``task/*.py`` files are never overwritten. Adding a brand new
-``(business_line, cadence)`` row scaffolds the whole DAG folder; adding a
-new table row to a group whose folder already exists drops in just that
-table's YAML next to the existing ones. Run as a script:
+The on-disk layout is treated as a mirror of the spreadsheet:
+
+* a brand new ``(business_line, cadence)`` row scaffolds the whole DAG folder;
+* a new table row added to an existing group drops just that table's YAML
+  next to the existing ones;
+* an existing row whose connector-relevant fields (``engine``,
+  ``connection_id_*``, ``database``, ``schema``, ``predicate``) changed
+  in the spreadsheet has its ``<table>.yaml`` rewritten to match;
+* a table row removed from an existing group deletes the matching
+  ``<table>.yaml``;
+* an entire group removed from the spreadsheet cancels the DAG by
+  deleting its folder.
+
+The hand-tweakable scaffold pieces (``dag.py`` and ``task/*.py``) are
+still never overwritten in groups that survive — only YAMLs that no
+longer match the spreadsheet, and whole folders for groups that no
+longer appear in the spreadsheet, are removed. Pass ``--dry-run`` to
+preview changes without touching the filesystem. Run as a script:
 
     python -m common_lib.create_dag --intake "Business Requirement.xlsx"
 """
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from common_lib.intake.read_excel import read_intake_rows
 from common_lib.intake.group_by_dag import group_by_dag
 from common_lib.scaffold.write_dag_file import write_dag_file
 from common_lib.scaffold.write_extract_task import write_extract_task
-from common_lib.scaffold.write_table_yaml import write_table_yaml
+from common_lib.scaffold.write_table_yaml import (
+    build_table_yaml_payload,
+    write_table_yaml,
+)
 from common_lib.scaffold.write_upload_task import write_upload_task
 
 
-def generate(intake_path: Path, repo_root: Path) -> dict[str, str]:
+def _is_dag_dir(path: Path) -> bool:
+    """A scaffolded DAG folder is any directory containing a top-level ``dag.py``."""
+    return path.is_dir() and (path / "dag.py").is_file()
+
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    """Best-effort read of an existing ``<table>.yaml``; missing/empty -> ``{}``."""
+    try:
+        loaded = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def generate(
+    intake_path: Path, repo_root: Path, *, dry_run: bool = False
+) -> dict[str, str]:
     """
     Returns ``{dag_id: status}`` where status is one of:
 
-    * ``"created"``  — the DAG folder did not exist; everything was scaffolded.
-    * ``"added: <t1>, <t2>"`` — the DAG folder already existed and one or
-      more new table YAMLs were added next to the existing ones.
-    * ``"skipped"``  — the DAG folder already existed and every table row
-      already had its YAML on disk; nothing was changed.
+    * ``"created"`` — the DAG folder did not exist; everything was scaffolded.
+    * ``"added: <t1>, <t2>"`` — new table YAMLs were dropped into an
+      existing group.
+    * ``"updated: <t1>, <t2>"`` — existing table YAMLs whose
+      connector-relevant fields drifted from the spreadsheet were
+      rewritten to match.
+    * ``"removed: <t1>, <t2>"`` — table YAMLs that no longer match any
+      spreadsheet row were deleted from an existing group.
+    * Combinations of the above are joined with ``"; "`` (e.g.
+      ``"added: A; updated: B; removed: C"``).
+    * ``"cancelled"`` — the whole group disappeared from the spreadsheet
+      and its DAG folder was deleted.
+    * ``"skipped"`` — the DAG folder already existed and was already in
+      sync with the spreadsheet; nothing was changed.
+
+    When ``dry_run`` is true, the same statuses are returned but no
+    filesystem changes are made.
     """
     rows = read_intake_rows(intake_path)
     groups = group_by_dag(rows)
@@ -38,29 +86,64 @@ def generate(intake_path: Path, repo_root: Path) -> dict[str, str]:
     for dag_id, group_rows in groups.items():
         dag_dir = repo_root / dag_id
         existed = dag_dir.exists()
-        dag_dir.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            dag_dir.mkdir(parents=True, exist_ok=True)
+
+        wanted_tables = {str(row["table"]) for row in group_rows}
 
         added: list[str] = []
+        updated: list[str] = []
         for row in group_rows:
             yaml_path = dag_dir / "table" / f"{row['table']}.yaml"
-            if yaml_path.exists():
-                continue
-            write_table_yaml(dag_dir, row)
-            added.append(str(row["table"]))
+            desired = build_table_yaml_payload(row)
+            if not yaml_path.exists():
+                if not dry_run:
+                    write_table_yaml(dag_dir, row)
+                added.append(str(row["table"]))
+            elif _read_yaml(yaml_path) != desired:
+                if not dry_run:
+                    write_table_yaml(dag_dir, row)
+                updated.append(str(row["table"]))
 
-        if not (dag_dir / "task" / "extract.py").exists():
-            write_extract_task(dag_dir)
-        if not (dag_dir / "task" / "upload.py").exists():
-            write_upload_task(dag_dir)
-        if not (dag_dir / "dag.py").exists():
-            write_dag_file(dag_dir, group_rows[0]["cadence"])
+        removed: list[str] = []
+        table_dir = dag_dir / "table"
+        if table_dir.exists():
+            for yaml_path in sorted(table_dir.glob("*.yaml")):
+                if yaml_path.stem in wanted_tables:
+                    continue
+                if not dry_run:
+                    yaml_path.unlink()
+                removed.append(yaml_path.stem)
+
+        if not dry_run:
+            if not (dag_dir / "task" / "extract.py").exists():
+                write_extract_task(dag_dir)
+            if not (dag_dir / "task" / "upload.py").exists():
+                write_upload_task(dag_dir)
+            if not (dag_dir / "dag.py").exists():
+                write_dag_file(dag_dir, group_rows[0]["cadence"])
 
         if not existed:
             results[dag_id] = "created"
-        elif added:
-            results[dag_id] = f"added: {', '.join(added)}"
         else:
-            results[dag_id] = "skipped"
+            parts: list[str] = []
+            if added:
+                parts.append(f"added: {', '.join(added)}")
+            if updated:
+                parts.append(f"updated: {', '.join(updated)}")
+            if removed:
+                parts.append(f"removed: {', '.join(removed)}")
+            results[dag_id] = "; ".join(parts) if parts else "skipped"
+
+    wanted_dag_ids = set(groups)
+    for child in sorted(repo_root.iterdir()):
+        if child.name in wanted_dag_ids:
+            continue
+        if not _is_dag_dir(child):
+            continue
+        if not dry_run:
+            shutil.rmtree(child)
+        results[child.name] = "cancelled"
 
     return results
 
@@ -79,9 +162,18 @@ def main() -> None:
         default=Path("."),
         help="Folder where DAG directories are created (default: %(default)s)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the planned changes without modifying the filesystem.",
+    )
     args = parser.parse_args()
 
-    results = generate(args.intake.resolve(), args.repo_root.resolve())
+    results = generate(
+        args.intake.resolve(), args.repo_root.resolve(), dry_run=args.dry_run
+    )
+    if args.dry_run:
+        print("[dry-run] no changes were applied")
     if not results:
         print("Intake is empty; no DAGs to generate.")
         return
