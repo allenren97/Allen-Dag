@@ -32,7 +32,8 @@ def extract(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
     by every ``BaseImportConnector`` subclass that sets a non-empty ``ENGINE``),
     so adding a new source database does not require editing this file.
     """
-    del upstream_task_ids
+    # TaskGroup always passes upstream IDs; extract is the chain root — nothing upstream.
+    _ = upstream_task_ids
     cfg = _load_cfg(yaml_path)
     context = get_current_context()
     engine = str(cfg.get("engine") or "").strip().lower()

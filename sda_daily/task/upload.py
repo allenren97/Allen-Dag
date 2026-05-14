@@ -36,7 +36,9 @@ def _resolve_export_class(cfg: dict[str, Any], yaml_path: str) -> type:
             )
         return cls
     if len(EXPORT_CONNECTORS) == 1:
-        return next(iter(EXPORT_CONNECTORS.values()))
+        # Exactly one exporter is registered; YAML may omit `export_engine`.
+        for export_cls in EXPORT_CONNECTORS.values():
+            return export_cls
     if not EXPORT_CONNECTORS:
         raise AirflowException("No export connectors registered; cannot upload.")
     raise AirflowException(
@@ -57,7 +59,8 @@ def upload(yaml_path: str, upstream_task_ids: dict[str, str]) -> str:
         )
 
     dag = context.get("dag")
-    container_name = getattr(dag, "dag_id", None) or "manual"
+    # Azure container names cannot contain `_`; DAG ids often use underscores.
+    container_name = str(getattr(dag, "dag_id", None) or "manual").replace("_", "-")
 
     export_cls = _resolve_export_class(cfg, yaml_path)
     logger.info(

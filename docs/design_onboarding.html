@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ETL repo — design explorer (onboarding)</title>
+  <style>
+    :root {
+      --bg: #0c0e12;
+      --surface: #151922;
+      --elevated: #1c2230;
+      --border: #2a3344;
+      --text: #eef2f7;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.15);
+      --success: #4ade80;
+      --warn: #fbbf24;
+      --radius: 10px;
+      --font: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .shell {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.25rem 1rem 3rem;
+    }
+
+    header.hero {
+      text-align: center;
+      padding: 2rem 0 1.5rem;
+    }
+    header.hero h1 {
+      margin: 0 0 0.5rem;
+      font-size: clamp(1.35rem, 4vw, 1.75rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    header.hero p {
+      margin: 0 auto;
+      max-width: 34rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+    }
+    .tabs button {
+      font-family: var(--font);
+      font-size: 0.88rem;
+      font-weight: 600;
+      padding: 0.55rem 1rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .tabs button:hover {
+      color: var(--text);
+      border-color: var(--muted);
+    }
+    .tabs button[aria-selected="true"] {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    section.view {
+      display: none;
+      animation: in 0.25s ease;
+    }
+    section.view.active { display: block; }
+    @keyframes in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    .card h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.05rem;
+    }
+    .card p:last-child { margin-bottom: 0; }
+    p { margin: 0 0 0.85rem; color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    code, .mono {
+      font-family: var(--mono);
+      font-size: 0.84em;
+      background: var(--elevated);
+      padding: 0.12em 0.35em;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    /* —— Tour —— */
+    .tour-progress {
+      display: flex;
+      gap: 0.35rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .tour-progress button {
+      width: 10px;
+      height: 10px;
+      padding: 0;
+      border-radius: 50%;
+      border: none;
+      background: var(--border);
+      cursor: pointer;
+    }
+    .tour-progress button[aria-current="step"] {
+      background: var(--accent);
+      transform: scale(1.25);
+    }
+    .tour-progress button:hover { background: var(--muted); }
+
+    .tour-slide h3 {
+      margin: 0 0 0.65rem;
+      font-size: 1.15rem;
+      color: var(--accent);
+    }
+    .tour-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 1.25rem;
+      gap: 1rem;
+    }
+    .tour-nav button {
+      font-family: var(--font);
+      font-weight: 600;
+      padding: 0.55rem 1.15rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--elevated);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .tour-nav button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0c0e12;
+    }
+    .tour-nav button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .tour-hint {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+    }
+
+    /* —— Flow map —— */
+    .flow-wrap {
+      overflow-x: auto;
+      padding: 0.5rem 0;
+    }
+    .flow-svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+    .flow-node {
+      cursor: pointer;
+      transition: filter 0.15s;
+    }
+    .flow-node rect {
+      fill: var(--elevated);
+      stroke: var(--border);
+      stroke-width: 2;
+      rx: 8;
+    }
+    .flow-node text {
+      fill: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 600;
+      pointer-events: none;
+    }
+    .flow-node.sub text { font-size: 11px; fill: var(--muted); font-weight: 500; }
+    .flow-node:hover rect, .flow-node:focus rect {
+      stroke: var(--accent);
+      filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.35));
+    }
+    .flow-node.selected rect {
+      stroke: var(--accent);
+      fill: var(--accent-dim);
+    }
+    .flow-detail {
+      margin-top: 1rem;
+      min-height: 8rem;
+    }
+    .flow-detail h4 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+    }
+    .flow-detail ul {
+      margin: 0;
+      padding-left: 1.2rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .flow-detail li { margin: 0.35rem 0; }
+
+    /* —— Glossary —— */
+    .glossary-search {
+      width: 100%;
+      padding: 0.6rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      margin-bottom: 1rem;
+    }
+    dl.glossary { margin: 0; }
+    dl.glossary div {
+      border-bottom: 1px solid var(--border);
+      padding: 0.85rem 0;
+    }
+    dl.glossary div.hidden { display: none; }
+    dl.glossary dt {
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 0.95rem;
+    }
+    dl.glossary dd {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* —— Quiz —— */
+    .quiz-q {
+      margin-bottom: 1.25rem;
+    }
+    .quiz-q p { font-weight: 600; margin-bottom: 0.5rem; }
+    .quiz-opt {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 0.35rem 0;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--elevated);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.92rem;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .quiz-opt:hover:not(:disabled) { border-color: var(--muted); }
+    .quiz-opt:disabled { cursor: default; opacity: 0.9; }
+    .quiz-opt.correct { border-color: var(--success); background: rgba(74, 222, 128, 0.12); }
+    .quiz-opt.wrong { border-color: #f87171; background: rgba(248, 113, 113, 0.1); }
+    .quiz-score {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--success);
+      margin-top: 1rem;
+    }
+    .quiz-reset {
+      margin-top: 1rem;
+      font-family: var(--font);
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+    }
+
+    footer.note {
+      text-align: center;
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <h1>Understand this repo in a few minutes</h1>
+      <p>
+        Business rows in Excel drive folders and YAML on disk. Airflow runs those DAGs and
+        calls shared Python libraries. Pick a mode below—no install, no server, works offline in your browser.
+      </p>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="Onboarding modes">
+      <button type="button" role="tab" id="tab-tour" aria-selected="true" aria-controls="view-tour">Guided tour</button>
+      <button type="button" role="tab" id="tab-flow" aria-selected="false" aria-controls="view-flow">Interactive flow</button>
+      <button type="button" role="tab" id="tab-gloss" aria-selected="false" aria-controls="view-gloss">Glossary</button>
+      <button type="button" role="tab" id="tab-quiz" aria-selected="false" aria-controls="view-quiz">Check yourself</button>
+    </div>
+
+    <!-- Guided tour -->
+    <section id="view-tour" class="view active card" role="tabpanel" aria-labelledby="tab-tour">
+      <h2>Guided tour</h2>
+      <div class="tour-progress" id="tour-dots" aria-label="Tour steps"></div>
+      <div class="tour-slide" id="tour-content"></div>
+      <div class="tour-nav">
+        <button type="button" id="tour-prev">Back</button>
+        <button type="button" class="primary" id="tour-next">Next</button>
+      </div>
+      <p class="tour-hint">Tip: use Next until you reach “You’re set”—then try the flow map and quiz.</p>
+    </section>
+
+    <!-- Flow map -->
+    <section id="view-flow" class="view card" role="tabpanel" aria-labelledby="tab-flow" hidden>
+      <h2>Interactive flow</h2>
+      <p class="muted">Click a box. Arrows show the main direction of data and control.</p>
+      <div class="flow-wrap">
+        <svg class="flow-svg" viewBox="0 0 720 340" width="720" height="340" aria-label="Pipeline flow">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#475569" />
+            </marker>
+          </defs>
+          <g stroke="#334155" stroke-width="2" fill="none" marker-end="url(#arrow)">
+            <path d="M120 52 L120 78" />
+            <path d="M120 132 L120 158" />
+            <path d="M120 212 L120 238" />
+            <path d="M200 268 L420 268" />
+            <path d="M500 238 L500 212" />
+            <path d="M500 132 L500 106" />
+            <path d="M500 52 L500 26 L360 26 L360 52" />
+            <path d="M280 105 L440 105" />
+          </g>
+
+          <g class="flow-node" tabindex="0" role="button" data-id="excel" transform="translate(40,10)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">Excel intake</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">.xlsx rows</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="create" transform="translate(40,90)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">create_dag CLI</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">python -m …</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="disk" transform="translate(40,170)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">DAG folder on disk</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">dag.py + table/*.yaml</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="airflow" transform="translate(280,170)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">Airflow scheduler</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">loads dag.py</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="taskgroup" transform="translate(520,170)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">TaskGroup builder</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">wires tasks</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="extract" transform="translate(520,90)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">extract task</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">→ parquet path</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="upload" transform="translate(520,10)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">upload task</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">→ blob / URI</text>
+          </g>
+          <g class="flow-node" tabindex="0" role="button" data-id="connectors" transform="translate(280,10)">
+            <rect width="160" height="44" />
+            <text x="80" y="22" text-anchor="middle">connector_class</text>
+            <text class="sub" x="80" y="38" text-anchor="middle">registries</text>
+          </g>
+        </svg>
+      </div>
+      <div class="flow-detail card" id="flow-detail" style="margin-bottom:0;background:var(--elevated)"></div>
+    </section>
+
+    <!-- Glossary -->
+    <section id="view-gloss" class="view card" role="tabpanel" aria-labelledby="tab-gloss" hidden>
+      <h2>Glossary</h2>
+      <label class="muted" for="gloss-filter" style="display:block;margin-bottom:0.35rem">Filter terms</label>
+      <input type="search" id="gloss-filter" class="glossary-search" placeholder="Type to filter…" autocomplete="off" />
+      <dl class="glossary" id="glossary-list"></dl>
+    </section>
+
+    <!-- Quiz -->
+    <section id="view-quiz" class="view card" role="tabpanel" aria-labelledby="tab-quiz" hidden>
+      <h2>Check yourself</h2>
+      <p class="muted">Five quick questions. Wrong answers turn red; the right one turns green.</p>
+      <div id="quiz-root"></div>
+    </section>
+
+    <footer class="note">
+      Open this file from disk in any browser. Repo path: <span class="mono">docs/design_onboarding.html</span>
+    </footer>
+  </div>
+
+  <script>
+(function () {
+  const TOUR_STEPS = [
+    {
+      title: "Big picture",
+      html: `<p>This project turns <strong>spreadsheet rows</strong> into <strong>Airflow DAG folders</strong>. Each DAG pulls data from a database (extract) and pushes a file to cloud storage (upload).</p><p class="muted">Two worlds: (1) a <strong>CLI tool</strong> you run when the Excel changes, (2) <strong>Airflow</strong> which runs on a schedule.</p>`,
+    },
+    {
+      title: "Where Excel goes first",
+      html: `<p>Rows are read by <code>read_intake_rows</code> in <code>common_lib/intake/read_excel.py</code>. Each row becomes a Python dict with keys like <code>business_line</code>, <code>cadence</code>, <code>engine</code>, <code>table</code>, etc.</p><p class="muted">Blank rows and rows missing business line + cadence are skipped.</p>`,
+    },
+    {
+      title: "How rows become DAG ids",
+      html: `<p><code>group_by_dag</code> in <code>common_lib/intake/group_by_dag.py</code> builds a folder name from <code>business_line</code> and <code>cadence</code> (slugged and joined with <code>_</code>). That string is your <strong>dag_id</strong> and also the folder name under the repo root.</p><p class="muted">Each (dag_id, table) pair must be unique in the sheet.</p>`,
+    },
+    {
+      title: "What the CLI actually writes",
+      html: `<p><code>python -m common_lib.create_dag --intake "…xlsx"</code> runs <code>generate()</code> in <code>create_dag.py</code>. For each DAG group it:</p><ul style="margin:0 0 1rem 1.1rem;color:var(--muted);font-size:0.92rem"><li>Writes <code>&lt;dag&gt;/table/&lt;table&gt;.yaml</code> (connector settings)</li><li>Creates <code>task/extract.py</code> and <code>task/upload.py</code> once if missing</li><li>Creates <code>dag.py</code> once if missing</li></ul><p class="muted">Hand-edited <code>dag.py</code> / task files are not overwritten on later runs—only YAML syncs.</p>`,
+    },
+    {
+      title: "What Airflow does with dag.py",
+      html: `<p>Generated <code>dag.py</code> loops over every <code>*.yaml</code> in <code>table/</code> and calls <code>build_table_taskgroup</code> from <code>common_lib/tasks/build_table_taskgroup.py</code>.</p><p>That function loads every <code>task/*.py</code>, reads each module’s <code>UPSTREAM_TASKS</code>, sorts tasks in order, and creates <code>PythonOperator</code>s. It passes <code>yaml_path</code> and <code>upstream_task_ids</code> into each callable.</p>`,
+    },
+    {
+      title: "Extract → upload (data handoff)",
+      html: `<p><strong>Extract</strong> reads the YAML, looks up <code>IMPORT_CONNECTORS[engine]</code>, runs <code>to_parquet(**context)</code>, and <strong>returns the local parquet path</strong> (stored in XCom).</p><p><strong>Upload</strong> pulls that path with <code>xcom_pull</code>, resolves <code>EXPORT_CONNECTORS</code> (and optional <code>export_engine</code> in YAML), and calls <code>upload(...)</code> on the exporter. It returns a destination URI string.</p>`,
+    },
+    {
+      title: "Why you don’t import wasb.py directly",
+      html: `<p><code>common_lib/connector_class/__init__.py</code> imports every connector module at startup and fills two dicts: <code>IMPORT_CONNECTORS</code> and <code>EXPORT_CONNECTORS</code>, keyed by <code>ENGINE</code> / <code>EXPORT</code> strings on each class.</p><p class="muted">Adding a new database or cloud target is usually “drop a new file + set ENGINE/EXPORT”—tasks stay generic.</p>`,
+    },
+    {
+      title: "You’re set",
+      html: `<p>Use <strong>Interactive flow</strong> to click each stage again. <strong>Glossary</strong> defines jargon. <strong>Check yourself</strong> locks in the mental model.</p><p class="muted">When in doubt, read <code>create_dag.py</code> (sync logic) and <code>build_table_taskgroup.py</code> (how operators chain).</p>`,
+    },
+  ];
+
+  const FLOW_INFO = {
+    excel: {
+      title: "Excel intake",
+      bullets: [
+        "First worksheet; headers must include business_line, cadence, engine, connections, database, schema, table.",
+        "Normalized into dict rows — blanks become None.",
+      ],
+    },
+    create: {
+      title: "create_dag (CLI)",
+      bullets: [
+        "Entry: common_lib/create_dag.py → main() → generate().",
+        "read_intake_rows(path) → group_by_dag(rows); then sync files per dag_id.",
+        "Returns a status dict per DAG (created, skipped, updated tables, cancelled folders).",
+      ],
+    },
+    disk: {
+      title: "DAG folder on disk",
+      bullets: [
+        "dag_id matches folder name (e.g. rrap_weekly/).",
+        "table/*.yaml — one file per table; extract/upload read these at runtime.",
+        "task/extract.py & task/upload.py — thin wrappers around connector registries.",
+      ],
+    },
+    airflow: {
+      title: "Airflow scheduler",
+      bullets: [
+        "Parses dag.py; DAG id equals folder name (HERE.name).",
+        "Does not run create_dag — that is a separate developer/ops step when Excel changes.",
+      ],
+    },
+    taskgroup: {
+      title: "build_table_taskgroup",
+      bullets: [
+        "Discovers task/*.py; for each task, wires each name in UPSTREAM_TASKS as upstream >> this task (generic [upstream] >> [downstream]).",
+        "Topological sort orders creation; default two-task folder yields extract >> upload only.",
+        "Passes op_kwargs: yaml_path + upstream_task_ids for XCom wiring.",
+      ],
+    },
+    extract: {
+      title: "extract task",
+      bullets: [
+        "IMPORT_CONNECTORS[engine] → instantiate → to_parquet(**context).",
+        "Return value: str path to parquet (downstream upload reads via XCom).",
+      ],
+    },
+    upload: {
+      title: "upload task",
+      bullets: [
+        "xcom_pull(extract task) → parquet path.",
+        "Container name derived from DAG id (underscores → hyphens for Azure).",
+        "EXPORT_CONNECTORS → exporter.upload(...) → returns URI (e.g. wasb://…).",
+      ],
+    },
+    connectors: {
+      title: "connector_class package",
+      bullets: [
+        "BaseImportConnector / BaseExportConnector — shared orchestration.",
+        "Concrete modules (mssql, db2, wasb) register via ENGINE or EXPORT class attrs.",
+        "Import common_lib.connector_class to populate registries before lookup.",
+      ],
+    },
+  };
+
+  const GLOSSARY = [
+    { term: "dag_id", def: "Airflow DAG identifier. Here it equals the on-disk folder name, built from slug(business_line) + '_' + slug(cadence)." },
+    { term: "Intake row", def: "One dict produced from a spreadsheet row after normalization in read_intake_rows." },
+    { term: "generate()", def: "Function in create_dag.py that syncs all DAG folders to match the current Excel state." },
+    { term: "Table YAML", def: "File at <dag>/table/<table>.yaml holding engine, connection ids, database, schema, table, optional predicate." },
+    { term: "XCom", def: "Airflow mechanism for passing small return values between tasks; extract returns parquet path, upload pulls it." },
+    { term: "IMPORT_CONNECTORS", def: "Dict[str, type] built at import time: YAML engine string → import connector class." },
+    { term: "EXPORT_CONNECTORS", def: "Dict[str, type] for upload targets; optional export_engine in YAML if multiple exporters exist." },
+    { term: "ENGINE", def: "Class attribute on an import connector (e.g. 'mssql') — registry key for extract." },
+    { term: "EXPORT", def: "Class attribute on an export connector (e.g. 'azure_blob') — registry key for upload." },
+    { term: "TaskGroup", def: "Airflow grouping; one per table YAML so many tables share one DAG without task id collisions." },
+    { term: "UPSTREAM_TASKS", def: "Per task/*.py: list of other task stems that must run before this one; builder wires upstream >> downstream. Default: upload lists ['extract']; extract lists []." },
+    { term: "dry-run", def: "create_dag --dry-run computes the same status dict without writing or deleting files." },
+  ];
+
+  const QUIZ = [
+    {
+      q: "Who creates the <dag>/table/*.yaml files?",
+      opts: [
+        "Airflow when the DAG runs",
+        "The create_dag CLI from the Excel intake",
+        "The extract task at runtime",
+      ],
+      a: 1,
+    },
+    {
+      q: "How does upload get the path to the parquet file?",
+      opts: [
+        "It reads the path from the YAML only",
+        "It calls xcom_pull on the extract task’s return value",
+        "It scans the landing directory for the newest file",
+      ],
+      a: 1,
+    },
+    {
+      q: "Why do extract.py and upload.py import EXPORT_CONNECTORS / IMPORT_CONNECTORS instead of wasb or mssql directly?",
+      opts: [
+        "So new engines can be added without editing every DAG’s task files",
+        "Because Airflow forbids direct database imports",
+        "Those imports are faster",
+      ],
+      a: 0,
+    },
+    {
+      q: "What does build_table_taskgroup need from each task/*.py file?",
+      opts: [
+        "Only a function named main",
+        "A callable named like the file (e.g. extract) and optional UPSTREAM_TASKS",
+        "A DAG object",
+      ],
+      a: 1,
+    },
+    {
+      q: "When you add a brand-new (business_line, cadence) group to the Excel, what happens on the next create_dag run?",
+      opts: [
+        "Nothing until you manually mkdir",
+        "A new folder is scaffolded (dag.py, tasks, YAMLs) under repo root",
+        "Airflow creates the folder on first schedule tick",
+      ],
+      a: 1,
+    },
+  ];
+
+  /* Tabs */
+  const tabs = document.querySelectorAll(".tabs [role=tab]");
+  const views = document.querySelectorAll("section.view");
+  function showView(id) {
+    tabs.forEach((t) => {
+      const on = t.id === "tab-" + id;
+      t.setAttribute("aria-selected", on);
+    });
+    views.forEach((v) => {
+      const on = v.id === "view-" + id;
+      v.classList.toggle("active", on);
+      v.hidden = !on;
+    });
+  }
+  tabs.forEach((t) => {
+    t.addEventListener("click", () => showView(t.id.replace("tab-", "")));
+  });
+
+  /* Tour */
+  let tourIdx = 0;
+  const tourContent = document.getElementById("tour-content");
+  const tourDots = document.getElementById("tour-dots");
+  const btnPrev = document.getElementById("tour-prev");
+  const btnNext = document.getElementById("tour-next");
+
+  function renderTourDots() {
+    tourDots.innerHTML = "";
+    TOUR_STEPS.forEach((_, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("aria-label", "Go to step " + (i + 1));
+      if (i === tourIdx) b.setAttribute("aria-current", "step");
+      b.addEventListener("click", () => {
+        tourIdx = i;
+        renderTour();
+      });
+      tourDots.appendChild(b);
+    });
+  }
+
+  function renderTour() {
+    const step = TOUR_STEPS[tourIdx];
+    tourContent.innerHTML = "<h3>" + step.title + "</h3>" + step.html;
+    btnPrev.disabled = tourIdx === 0;
+    btnNext.textContent = tourIdx === TOUR_STEPS.length - 1 ? "Done" : "Next";
+    renderTourDots();
+  }
+  btnPrev.addEventListener("click", () => {
+    if (tourIdx > 0) {
+      tourIdx--;
+      renderTour();
+    }
+  });
+  btnNext.addEventListener("click", () => {
+    if (tourIdx < TOUR_STEPS.length - 1) {
+      tourIdx++;
+      renderTour();
+    } else {
+      showView("flow");
+      document.getElementById("tab-flow").focus();
+    }
+  });
+  renderTour();
+
+  /* Flow map */
+  const flowDetail = document.getElementById("flow-detail");
+  function selectFlow(id) {
+    document.querySelectorAll(".flow-node").forEach((n) => {
+      n.classList.toggle("selected", n.dataset.id === id);
+    });
+    const info = FLOW_INFO[id];
+    if (!info) return;
+    flowDetail.innerHTML =
+      "<h4>" +
+      info.title +
+      "</h4><ul>" +
+      info.bullets.map((b) => "<li>" + b + "</li>").join("") +
+      "</ul>";
+  }
+  document.querySelectorAll(".flow-node").forEach((node) => {
+    node.addEventListener("click", () => selectFlow(node.dataset.id));
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectFlow(node.dataset.id);
+      }
+    });
+  });
+  selectFlow("excel");
+
+  /* Glossary */
+  const glossList = document.getElementById("glossary-list");
+  GLOSSARY.forEach(({ term, def }) => {
+    const wrap = document.createElement("div");
+    wrap.dataset.term = term.toLowerCase();
+    wrap.innerHTML = "<dt>" + term + "</dt><dd>" + def + "</dd>";
+    glossList.appendChild(wrap);
+  });
+  document.getElementById("gloss-filter").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    glossList.querySelectorAll("div").forEach((div) => {
+      const hay = div.dataset.term + " " + div.textContent.toLowerCase();
+      div.classList.toggle("hidden", q && !hay.includes(q));
+    });
+  });
+
+  /* Quiz */
+  const quizRoot = document.getElementById("quiz-root");
+  let quizAnswered = 0;
+  let quizCorrect = 0;
+
+  function buildQuiz() {
+    quizRoot.innerHTML = "";
+    quizAnswered = 0;
+    quizCorrect = 0;
+    QUIZ.forEach((item, qi) => {
+      const block = document.createElement("div");
+      block.className = "quiz-q";
+      block.innerHTML = "<p>" + (qi + 1) + ". " + item.q + "</p>";
+      item.opts.forEach((opt, oi) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "quiz-opt";
+        btn.textContent = opt;
+        btn.addEventListener("click", () => {
+          if (btn.disabled) return;
+          block.querySelectorAll(".quiz-opt").forEach((b) => {
+            b.disabled = true;
+          });
+          if (oi === item.a) {
+            btn.classList.add("correct");
+            quizCorrect++;
+          } else {
+            btn.classList.add("wrong");
+            block.querySelectorAll(".quiz-opt")[item.a].classList.add("correct");
+          }
+          quizAnswered++;
+          if (quizAnswered === QUIZ.length) {
+            const score = document.createElement("p");
+            score.className = "quiz-score";
+            score.textContent = "Score: " + quizCorrect + " / " + QUIZ.length;
+            quizRoot.appendChild(score);
+            const reset = document.createElement("button");
+            reset.type = "button";
+            reset.className = "quiz-reset";
+            reset.textContent = "Reset quiz";
+            reset.addEventListener("click", buildQuiz);
+            quizRoot.appendChild(reset);
+          }
+        });
+        block.appendChild(btn);
+      });
+      quizRoot.appendChild(block);
+    });
+  }
+  buildQuiz();
+})();
+  </script>
+</body>
+</html>

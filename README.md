@@ -319,6 +319,9 @@ when you need it.
 
 ```bash
 python -m common_lib.create_dag --intake "Business Requirement.xlsx" --repo-root .
+
+# Preview what would change (no mkdir / writes / deletes)
+python -m common_lib.create_dag --intake "Business Requirement.xlsx" --repo-root . --dry-run
 ```
 
 CLI flags (all optional; defaults shown):

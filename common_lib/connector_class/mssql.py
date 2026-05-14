@@ -17,6 +17,7 @@ class MSSQLImportConnector(BaseImportConnector):
     ENGINE = "mssql"
 
     def _build_query(self) -> str:
+        # Bracket quoting is T-SQL-specific; avoids reserved words breaking unquoted identifiers.
         query = f"SELECT * FROM [{self.database}].[{self.schema}].[{self.table}]"
         if self.predicate:
             query += f" WHERE {self.predicate}"
@@ -34,6 +35,7 @@ class MSSQLImportConnector(BaseImportConnector):
         return MsSqlHook(mssql_conn_id=self.connection_id)
 
     def _fetch_dataframe(self) -> pd.DataFrame:
+        # Delegates pooling / cursor details to MsSqlHook so we stay thin — only orchestration differs per engine inside BaseImportConnector.
         hook = self._get_hook()
         query = self._build_query()
         self.logger.info(

@@ -49,6 +49,7 @@ class BaseExportConnector(BaseConnector):
             schema=schema,
             table=table,
         )
+        # Upload task passes dag_id as container_name usually; DEFAULT_CONTAINER catches tests/tools.
         self.container_name = (container_name or self.DEFAULT_CONTAINER).strip()
         if not self.container_name:
             raise ValueError("container_name must be a non-empty string")
@@ -57,11 +58,29 @@ class BaseExportConnector(BaseConnector):
 
     def _build_blob_name(self, local_path: Path, **context: Any) -> str:
         """Default remote key layout (override per export if needed)."""
+        # Default layout is a deterministic "virtual folder" prefix in blob storage.
+        # We prefer Airflow context keys when available so reruns are stable and sortable.
         dag = context.get("dag")
         dag_id = getattr(dag, "dag_id", None) or context.get("dag_id") or "manual"
-        return "/".join(
-            [dag_id, self.database, self.schema, self.table, local_path.name]
+
+        logical_date = context.get("logical_date")
+        rundate = context.get("ds") or (
+            logical_date.strftime("%Y-%m-%d") if logical_date is not None else "manual"
         )
+
+        # Keep the database + schema as a single path segment (safer for downstream tooling).
+        database_schema = f"{self.database}_{self.schema}"
+
+        ts = context.get("ts_nodash") or (
+            logical_date.strftime("%Y%m%dT%H%M%S") if logical_date is not None else None
+        )
+        if ts:
+            filename = f"{self.table}_{ts}{local_path.suffix or '.parquet'}"
+        else:
+            # Fallback: preserve whatever naming the upstream extract step produced.
+            filename = local_path.name
+
+        return "/".join([rundate, dag_id, database_schema, filename])
 
     def _build_target_uri(self, blob_name: str) -> str:
         """Human-readable destination URI (e.g. ``wasb://...`` or ``s3://...``)."""
@@ -75,6 +94,7 @@ class BaseExportConnector(BaseConnector):
 
     def upload(self, local_parquet_path: str, **context: Any) -> str:
         """Validate, upload, log, optionally delete-local; return the URI."""
+        # upload task XCom-pulls parquet path — empty string shouldn't silently upload cwd.
         if not local_parquet_path:
             raise AirflowException(
                 f"No local_parquet_path was provided to {type(self).__name__}.upload"
@@ -90,6 +110,7 @@ class BaseExportConnector(BaseConnector):
             raise AirflowException(f"Local parquet file is empty: {local}")
 
         blob_name = self._build_blob_name(local, **context)
+        # URI is for humans + downstream XCom; the actual SDK call happens in _upload_to_target.
         uri = self._build_target_uri(blob_name)
 
         self.logger.info(

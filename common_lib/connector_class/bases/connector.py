@@ -24,16 +24,18 @@ class BaseConnector(ABC):
         schema: str,
         table: str,
     ) -> None:
-        missing = [
-            name
-            for name, value in (
-                ("connection_id", connection_id),
-                ("database", database),
-                ("schema", schema),
-                ("table", table),
-            )
-            if not value or not str(value).strip()
-        ]
+        # Fail fast together: callers (YAML loaders) tend to omit several fields at
+        # once — one exception that lists everything is nicer than four separate blows.
+        missing = []
+        required_pairs = (
+            ("connection_id", connection_id),
+            ("database", database),
+            ("schema", schema),
+            ("table", table),
+        )
+        for name, value in required_pairs:
+            if not value or not str(value).strip():
+                missing.append(name)
         if missing:
             raise ValueError(
                 f"BaseConnector is missing required argument(s): {', '.join(missing)}"
@@ -43,6 +45,7 @@ class BaseConnector(ABC):
         self.database = database
         self.schema = schema
         self.table = table
+        # One logger per class name — easy to grep "MSSQLImportConnector:" in airflow logs.
         self.logger = logging.getLogger(self.__class__.__name__)
 
     @property

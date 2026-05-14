@@ -36,6 +36,8 @@ class BaseImportConnector(BaseConnector):
         predicate: Optional[str] = None,
     ) -> None:
         super().__init__(
+            # BaseConnector names it `connection_id` because each instance only speaks
+            # to one Airflow Connection; import ctors rename the arg for readability.
             connection_id=connection_id_import,
             database=database,
             schema=schema,
@@ -52,11 +54,14 @@ class BaseImportConnector(BaseConnector):
         raise NotImplementedError
 
     def _resolve_output_path(self, **context: Any) -> Path:
+        # Prefer real Airflow TaskInstance context (`dag`), fall back when running stubbed/manual.
         dag = context.get("dag")
         dag_id = getattr(dag, "dag_id", None) or context.get("dag_id") or "manual"
         run_date = context.get("ds") or "manual"
         ts_nodash = context.get("ts_nodash") or context.get("run_id") or "manual"
 
+        # database_schema as a directory avoids two different schemas clashing on disk
+        # when tables share the same name.
         file_path = (
             self.LANDING_DIR
             / dag_id
@@ -79,6 +84,8 @@ class BaseImportConnector(BaseConnector):
 
         df = self._fetch_dataframe()
         if df is None:
+            # Empty schema cannot be inferred from None — distinguishes "lazy subclass bug"
+            # from intentional 0-row result (handled below via df.empty).
             raise AirflowException(
                 f"{type(self).__name__} returned None for {self.full_table_name}; "
                 f"cannot infer schema to write a parquet file."
@@ -97,8 +104,10 @@ class BaseImportConnector(BaseConnector):
 
         try:
             df.to_parquet(tmp_path, engine="pyarrow", index=False)
+            # Atomic replace: concurrent readers either see old parquet or complete new file.
             tmp_path.replace(out_path)
         finally:
+            # tmp file must not linger — next run otherwise fails or reads half-written bytes.
             if tmp_path.exists():
                 tmp_path.unlink()
 

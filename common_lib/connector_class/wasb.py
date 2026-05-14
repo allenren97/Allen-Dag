@@ -57,6 +57,7 @@ class AzureExportConnector(BaseExportConnector):
     ) -> None:
         hook = self._get_hook()
         self._ensure_container(hook)
+        # load_file uploads bytes; overwrite flag replaces existing blob deterministically across reruns.
         hook.load_file(
             file_path=str(local),
             container_name=self.container_name,

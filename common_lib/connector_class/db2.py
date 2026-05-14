@@ -17,6 +17,8 @@ class DB2ImportConnector(BaseImportConnector):
     ENGINE = "db2"
 
     def _build_query(self) -> str:
+        # DB2 here targets schema.table inside the DATABASE chosen in conn_str below.
+        # If you ever need catalog-qualified SQL, evolve this alongside _open_connection().
         query = f"SELECT * FROM {self.schema}.{self.table}"
         if self.predicate:
             query += f" WHERE {self.predicate}"
@@ -61,6 +63,7 @@ class DB2ImportConnector(BaseImportConnector):
                 rows.append(row)
                 row = ibm_db.fetch_assoc(stmt)
         finally:
+            # Native driver connections don't auto-close like SQLAlchemy engines — tidy up eagerly.
             ibm_db.close(conn)
 
         return pd.DataFrame(data=rows)
